@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/kwasii1/fakerforge-db-agent/internal/api"
 	"github.com/kwasii1/fakerforge-db-agent/internal/config"
 	"github.com/kwasii1/fakerforge-db-agent/internal/db"
@@ -15,23 +16,33 @@ import (
 )
 
 // RunPush implements:
-//   fakerforge push --schema ID --connection NAME --table TABLE [--batch-size N] [--dry-run] [--yes]
+//
+//	fakerforge push --schema ID --connection NAME [--table TABLE]
+//	  [--batch-size N] [--dry-run] [--yes] [--append]
+//
+// With --table: single-table append (prod hosts confirm).
+// Without --table: every ready table, TRUNCATE + INSERT parents-first
+// (always confirmed), unless --append.
 func RunPush(args []string) int {
 	fs := flag.NewFlagSet("push", flag.ContinueOnError)
 	schemaID := fs.String("schema", "", "Schema ID")
 	connName := fs.String("connection", "", "Saved connection name")
-	table := fs.String("table", "", "Target table")
+	table := fs.String("table", "", "Single target table (default: all ready tables)")
 	batchSize := fs.Int("batch-size", 500, "Rows per transaction (1-5000)")
-	dryRun := fs.Bool("dry-run", false, "Show what would be inserted, write nothing")
-	yes := fs.Bool("yes", false, "Confirm writes to prod-like hosts")
+	dryRun := fs.Bool("dry-run", false, "Show what would happen, write nothing")
+	yes := fs.Bool("yes", false, "Confirm writes without prompting")
+	append := fs.Bool("append", false, "Insert without truncating first (all-tables mode)")
 	apiURL := fs.String("api-url", "", "API base URL")
 	apiKey := fs.String("api-key", "", "API key override")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	id := *schemaID
-	if id == "" || *table == "" {
-		fmt.Println("push requires --schema ID and --table TABLE")
+	if *schemaID == "" {
+		fmt.Println("push requires --schema ID")
+		return 2
+	}
+	if *connName == "" {
+		fmt.Println("push requires --connection NAME")
 		return 2
 	}
 	if *batchSize < 1 || *batchSize > 5000 {
@@ -66,66 +77,238 @@ func RunPush(args []string) int {
 	}
 	defer d.Close()
 
-	exists, err := d.TableExists(*table)
+	if *table != "" {
+		return pushSingleTable(client, d, conn, *schemaID, *table, *batchSize, *dryRun, *yes)
+	}
+	return pushAllTables(client, d, conn, *schemaID, *batchSize, *dryRun, *yes, *append)
+}
+
+// confirmWrite returns true when --yes was passed or the user types YES.
+func confirmWrite(yes bool, format string, a ...any) bool {
+	if yes {
+		return true
+	}
+	fmt.Printf(format, a...)
+	ans, err := promptLine("Type YES to continue")
+	if err != nil || strings.TrimSpace(ans) != "YES" {
+		fmt.Println("aborted.")
+		return false
+	}
+	return true
+}
+
+type tablePlan struct {
+	table   string
+	dbCols  []db.Column
+	rules   []api.SchemaColumn
+	rows    int
+	parents []string
+}
+
+// pushSingleTable pushes one table (append; prod hosts confirm).
+func pushSingleTable(client *api.Client, d db.Driver, conn config.Connection, schemaID, table string, batchSize int, dryRun, yes bool) int {
+	exists, err := d.TableExists(table)
 	if err != nil {
 		fmt.Printf("table check failed: %v\n", err)
 		return 1
 	}
 	if !exists {
-		fmt.Printf("target table %q does not exist in %s\n", *table, conn.Database)
+		fmt.Printf("target table %q does not exist in %s\n", table, conn.Database)
 		return 1
 	}
 
-	detail, err := client.ShowTable(id, *table)
+	detail, err := client.ShowTable(schemaID, table)
 	if err != nil {
 		fmt.Printf("schema fetch failed: %v\n", err)
 		return 1
 	}
 	if detail.Status != "" && detail.Status != "ready" {
-		fmt.Printf("schema %s is not ready (status=%q): refusing to push\n", id, detail.Status)
+		fmt.Printf("schema %s table %q is not ready (status=%q): refusing to push\n", schemaID, table, detail.Status)
 		return 1
 	}
 
-	dbCols, err := d.Introspect(*table)
+	dbCols, err := d.Introspect(table)
 	if err != nil {
 		fmt.Printf("introspect failed: %v\n", err)
 		return 1
 	}
 
-	// Prod heuristic: require --yes or interactive confirm.
-	if isProdHost(conn.Host) && !*dryRun && !*yes {
-		fmt.Printf("WARNING: target host %q looks like production.\n", conn.Host)
-		ans, err := promptLine("Type YES to continue")
-		if err != nil || strings.TrimSpace(ans) != "YES" {
-			fmt.Println("aborted.")
+	if isProdHost(conn.Host) && !dryRun {
+		if !confirmWrite(yes, "WARNING: target host %q looks like production.\n", conn.Host) {
 			return 1
 		}
 	}
 
-	if *dryRun {
-		return pushDryRun(client, id, *table, dbCols)
+	if dryRun {
+		return pushDryRun(client, schemaID, table, dbCols)
 	}
 
-	// Pre-check subset from advertised columns when available.
-	if len(detailCols(detail)) > 0 {
-		if ok, diff := db.CheckSubset(detailCols(detail), dbCols); !ok {
-			fmt.Printf("schema mismatch — refusing to push:\n%s\n", diff)
+	n, err := streamInsert(client, d.DB(), conn.Driver, schemaID, table, dbCols, detailCols(detail), batchSize)
+	if err != nil {
+		fmt.Printf("\n%s\n", err)
+		return 1
+	}
+	fmt.Printf("\n✓ Pushed %d rows into %s.%s\n", n, conn.Database, table)
+	return 0
+}
+
+// pushAllTables pushes every ready table: validate all, truncate, insert
+// parents-first. Aborts on the first failure with per-table tallies.
+func pushAllTables(client *api.Client, d db.Driver, conn config.Connection, schemaID string, batchSize int, dryRun, yes, appendMode bool) int {
+	detail, err := client.ShowSchema(schemaID)
+	if err != nil {
+		fmt.Printf("schema fetch failed: %v\n", err)
+		return 1
+	}
+	if len(detail.Tables) == 0 {
+		fmt.Printf("schema %s has no tables\n", schemaID)
+		return 1
+	}
+
+	// Phase 0: validate everything before touching any data.
+	var plans []tablePlan
+	for _, t := range detail.Tables {
+		if t.Status != "" && t.Status != "ready" {
+			fmt.Printf("WARNING: skipping %q (status=%q) — dependents may fail on FKs\n", t.Table, t.Status)
+			continue
+		}
+		exists, err := d.TableExists(t.Table)
+		if err != nil {
+			fmt.Printf("table check failed for %q: %v\n", t.Table, err)
+			return 1
+		}
+		if !exists {
+			fmt.Printf("target table %q does not exist in %s\n", t.Table, conn.Database)
+			return 1
+		}
+		dbCols, err := d.Introspect(t.Table)
+		if err != nil {
+			fmt.Printf("introspect %q failed: %v\n", t.Table, err)
+			return 1
+		}
+		td, err := client.ShowTable(schemaID, t.Table)
+		if err != nil {
+			fmt.Printf("schema fetch failed for %q: %v\n", t.Table, err)
+			return 1
+		}
+		rules := detailCols(td)
+		if len(rules) > 0 {
+			if ok, diff := db.CheckSubset(rules, dbCols); !ok {
+				fmt.Printf("schema mismatch for %q — refusing to push:\n%s\n", t.Table, diff)
+				return 1
+			}
+		}
+		plans = append(plans, tablePlan{table: t.Table, dbCols: dbCols, rules: rules, rows: t.Rows})
+	}
+	if len(plans) == 0 {
+		fmt.Printf("schema %s has no ready tables to push\n", schemaID)
+		return 1
+	}
+
+	// Order parents-first from the target DB's own FK graph, pruned to
+	// the pushed set (external refs must already hold in the target).
+	inSet := make(map[string]bool, len(plans))
+	for _, p := range plans {
+		inSet[p.table] = true
+	}
+	parents := make(map[string][]string, len(plans))
+	for _, p := range plans {
+		parents[p.table] = tableParentsOf(p.dbCols, inSet)
+	}
+
+	names := make([]string, 0, len(plans))
+	for _, p := range plans {
+		names = append(names, p.table)
+	}
+	ordered, err := orderTables(names, parents)
+	if err != nil {
+		fmt.Printf("cannot order tables: %v\n", err)
+		return 1
+	}
+	byName := make(map[string]tablePlan, len(plans))
+	for _, p := range plans {
+		byName[p.table] = p
+	}
+
+	// Plan print.
+	verb := "TRUNCATE + INSERT"
+	if appendMode {
+		verb = "INSERT"
+	}
+	fmt.Printf("%s %d table(s) in %s:\n", verb, len(ordered), conn.Database)
+	for _, t := range ordered {
+		fmt.Printf("  - %s (%d rows)\n", t, byName[t].rows)
+	}
+
+	if dryRun {
+		fmt.Println("(no writes performed)")
+		return 0
+	}
+	if !appendMode {
+		if !confirmWrite(yes, "WARNING: this will DELETE all existing rows in the %d table(s) above.\n", len(ordered)) {
+			return 1
+		}
+		if err := insert.TruncateTables(d.DB(), conn.Driver, ordered); err != nil {
+			fmt.Printf("truncate failed: %v\n", err)
+			return 1
+		}
+	} else if isProdHost(conn.Host) {
+		if !confirmWrite(yes, "WARNING: target host %q looks like production.\n", conn.Host) {
 			return 1
 		}
 	}
 
-	// Stream + batch. First row also validates subset when columns unknown.
-	batch := make([]map[string]any, 0, *batchSize)
+	total := 0
+	for _, t := range ordered {
+		p := byName[t]
+		n, err := streamInsert(client, d.DB(), conn.Driver, schemaID, t, p.dbCols, p.rules, batchSize)
+		if err != nil {
+			fmt.Printf("\n%s\naborted after %d total rows (%s: %d rows not completed)\n", err, total, t, p.rows)
+			return 1
+		}
+		total += n
+		fmt.Printf("\n✓ %s: %d rows\n", t, n)
+	}
+	fmt.Printf("✓ Pushed %d rows into %d table(s) in %s\n", total, len(ordered), conn.Database)
+	return 0
+}
+
+// tableParentsOf extracts parent table names, optionally pruned to inSet
+// (nil inSet keeps every well-formed ref).
+func tableParentsOf(dbCols []db.Column, inSet map[string]bool) []string {
+	var out []string
+	seen := make(map[string]bool)
+	for _, c := range dbCols {
+		parts := strings.SplitN(c.FKRef, ".", 2)
+		if len(parts) != 2 || parts[0] == "" {
+			continue
+		}
+		parent := parts[0]
+		if inSet != nil && !inSet[parent] {
+			continue
+		}
+		if !seen[parent] {
+			seen[parent] = true
+			out = append(out, parent)
+		}
+	}
+	return out
+}
+
+// streamInsert streams rows and batch-inserts them, printing running
+// progress. Returns rows inserted or a descriptive error.
+func streamInsert(client *api.Client, sqldb *sqlx.DB, driver, schemaID, table string, dbCols []db.Column, rules []api.SchemaColumn, batchSize int) (int, error) {
+	batch := make([]map[string]any, 0, batchSize)
 	var columns []string
 	succeeded := 0
-	checkedSubset := len(detailCols(detail)) > 0
+	checkedSubset := len(rules) > 0
 	var abortErr error
 
 	flush := func() int {
 		if len(batch) == 0 {
 			return 0
 		}
-		n, err := insert.Batch(d.DB(), conn.Driver, *table, columns, batch)
+		n, err := insert.Batch(sqldb, driver, table, columns, batch)
 		if err != nil {
 			fmt.Printf("\nbatch failed after %d succeeded rows: %v\n", succeeded, err)
 			return -1
@@ -136,7 +319,7 @@ func RunPush(args []string) int {
 		return n
 	}
 
-	_, streamErr := client.StreamRows(id, *table, func(row map[string]any) bool {
+	_, streamErr := client.StreamRows(schemaID, table, func(row map[string]any) bool {
 		if !checkedSubset {
 			cols := rowKeysAsSchema(row)
 			if ok, diff := db.CheckSubset(cols, dbCols); !ok {
@@ -151,7 +334,7 @@ func RunPush(args []string) int {
 			columns = sortedKeys(row)
 		}
 		batch = append(batch, row)
-		if len(batch) >= *batchSize {
+		if len(batch) >= batchSize {
 			if flush() < 0 {
 				abortErr = fmt.Errorf("batch insert failed")
 				return false
@@ -160,18 +343,15 @@ func RunPush(args []string) int {
 		return true
 	})
 	if abortErr != nil {
-		fmt.Printf("\n%s\n", abortErr)
-		return 1
+		return succeeded, abortErr
 	}
 	if streamErr != nil {
-		fmt.Printf("\nstream failed after %d rows: %v\n", succeeded, streamErr)
-		return 1
+		return succeeded, fmt.Errorf("stream failed after %d rows: %w", succeeded, streamErr)
 	}
 	if flush() < 0 {
-		return 1
+		return succeeded, fmt.Errorf("batch insert failed")
 	}
-	fmt.Printf("\n✓ Pushed %d rows into %s.%s\n", succeeded, conn.Database, *table)
-	return 0
+	return succeeded, nil
 }
 
 func pushDryRun(client *api.Client, id, table string, dbCols []db.Column) int {

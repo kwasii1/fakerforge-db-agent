@@ -78,6 +78,44 @@ func placeholder(driver string) func(int) string {
 	return func(int) string { return "?" }
 }
 
+// buildTruncateSQL renders one multi-table TRUNCATE statement. A single
+// statement keeps Postgres happy about FK references between the listed
+// tables. Pure function for unit testing.
+func buildTruncateSQL(driver string, tables []string) string {
+	quoted := make([]string, 0, len(tables))
+	for _, t := range tables {
+		quoted = append(quoted, quoteIdent(driver, t))
+	}
+	return "TRUNCATE TABLE " + strings.Join(quoted, ", ")
+}
+
+// TruncateTables clears every listed table.
+// Postgres truncates all tables in one statement, which also satisfies
+// FK references between them. MySQL has no multi-table TRUNCATE, so it
+// disables session FK checks and truncates children-first instead.
+// The MySQL toggle is session-scoped and always restored.
+func TruncateTables(db *sqlx.DB, driver string, tables []string) error {
+	if len(tables) == 0 {
+		return nil
+	}
+	if driver == "mysql" {
+		if _, err := db.Exec("SET FOREIGN_KEY_CHECKS=0"); err != nil {
+			return fmt.Errorf("disable foreign key checks: %w", err)
+		}
+		defer func() { _, _ = db.Exec("SET FOREIGN_KEY_CHECKS=1") }()
+		for i := len(tables) - 1; i >= 0; i-- {
+			if _, err := db.Exec(buildTruncateSQL(driver, tables[i : i+1])); err != nil {
+				return fmt.Errorf("truncate %s: %w", tables[i], err)
+			}
+		}
+		return nil
+	}
+	if _, err := db.Exec(buildTruncateSQL(driver, tables)); err != nil {
+		return fmt.Errorf("truncate (%d tables): %w", len(tables), err)
+	}
+	return nil
+}
+
 func quoteIdent(driver, ident string) string {
 	ident = strings.ReplaceAll(ident, `"`, "")
 	if driver == "mysql" {

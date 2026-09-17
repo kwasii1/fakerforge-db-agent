@@ -85,7 +85,7 @@ Usage:
   fakerforge schemas list [--table TABLE] [--format table|json]
   fakerforge schemas show SCHEMA_ID [--table TABLE]
 
-  fakerforge push --schema SCHEMA_ID --connection NAME --table TABLE [--batch-size N] [--dry-run] [--yes]
+  fakerforge push --schema SCHEMA_ID --connection NAME [--table TABLE] [--batch-size N] [--dry-run] [--yes] [--append]
 
   fakerforge status
   fakerforge version

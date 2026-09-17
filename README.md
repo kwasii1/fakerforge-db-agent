@@ -47,6 +47,8 @@ fakerforge schemas show <schema-id> --table users  # columns, status, sample
 
 fakerforge push --schema <schema-id> --connection local --table users --dry-run
 fakerforge push --schema <schema-id> --connection local --table users
+# no --table: TRUNCATE + INSERT every ready table, parents-first (confirmed);
+# --append to insert without truncating
 
 fakerforge status   # API auth + per-connection ping + CLI version check
 ```
@@ -61,7 +63,7 @@ fakerforge status   # API auth + per-connection ping + CLI version check
 | `schema pull` | multi-table introspect → CLI-built parsed tables + DDL → `POST /api/schemas` → generate → poll `…/progress` to ready; `--tables`, `--rows` (def. 100), `--force`, `--regenerate`, `--async`, `--timeout`, `--interval` |
 | `schemas list` | `GET /api/schemas[?table=]` → `SCHEMA ID NAME TABLES CREATED`; `--format json` for CI |
 | `schemas show` | `GET /api/schemas/{id}[?table=]` → per-table rows + status; with `--table`, columns/rules + sample |
-| `push` | checks conn + table + `ready` status + column-subset compat; streams JSONL in `--batch-size` txns (default 500); `--dry-run`; prod hosts need `--yes` |
+| `push` | `--table` for single-table append; otherwise TRUNCATE + INSERT all ready tables parents-first (always confirmed unless `--yes`); `--append` skips truncate; `--dry-run`; per-table subset checks; abort on first failure with tallies |
 | `status` | exit non-zero if auth or connections broken |
 
 ## Security
