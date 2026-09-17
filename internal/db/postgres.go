@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/jmoiron/sqlx"
-	_ "github.com/lib/pq"
 	"github.com/kwasii1/fakerforge-db-agent/internal/config"
+	_ "github.com/lib/pq"
 )
 
 type pgDriver struct {
@@ -34,7 +34,7 @@ func openPostgres(c config.Connection, password string) (Driver, error) {
 }
 
 func (d *pgDriver) DB() *sqlx.DB { return d.db }
-func (d *pgDriver) Close() error  { return d.db.Close() }
+func (d *pgDriver) Close() error { return d.db.Close() }
 
 func (d *pgDriver) Ping() error {
 	if err := d.db.Ping(); err != nil {
@@ -66,10 +66,14 @@ func (d *pgDriver) Introspect(table string) ([]Column, error) {
 		ColName  string `db:"col_name"`
 		DataType string `db:"data_type"`
 		Nullable string `db:"nullable"`
+		MaxLen   *int64 `db:"max_len"`
+		NumPrec  *int64 `db:"num_prec"`
+		NumScale *int64 `db:"num_scale"`
 	}
 	var rows []row
 	q := `
-SELECT c.column_name AS col_name, c.data_type AS data_type, c.is_nullable AS nullable
+SELECT c.column_name AS col_name, c.data_type AS data_type, c.is_nullable AS nullable,
+       c.character_maximum_length AS max_len, c.numeric_precision AS num_prec, c.numeric_scale AS num_scale
 FROM information_schema.columns c
 WHERE c.table_schema='public' AND c.table_name=$1
 ORDER BY c.ordinal_position`
@@ -86,12 +90,15 @@ ORDER BY c.ordinal_position`
 	out := make([]Column, 0, len(rows))
 	for _, r := range rows {
 		col := Column{
-			Name:     r.ColName,
-			Type:     normalizeType(r.DataType),
-			Nullable: strings.EqualFold(r.Nullable, "YES"),
-			IsPK:     pks[r.ColName],
-			Unique:   uniqs[r.ColName],
-			FKRef:    fks[r.ColName],
+			Name:      r.ColName,
+			Type:      normalizeType(r.DataType),
+			Nullable:  strings.EqualFold(r.Nullable, "YES"),
+			IsPK:      pks[r.ColName],
+			Unique:    uniqs[r.ColName],
+			FKRef:     fks[r.ColName],
+			Length:    intValue(r.MaxLen),
+			Precision: intValue(r.NumPrec),
+			Scale:     intValue(r.NumScale),
 		}
 		out = append(out, col)
 	}
@@ -137,9 +144,9 @@ WHERE tc.table_schema='public' AND tc.table_name=$1 AND tc.constraint_type='UNIQ
 func (d *pgDriver) fkRefs(table string) (map[string]string, error) {
 	m := map[string]string{}
 	type fk struct {
-		Col    string `db:"col"`
-		FTab   string `db:"ftab"`
-		FCol   string `db:"fcol"`
+		Col  string `db:"col"`
+		FTab string `db:"ftab"`
+		FCol string `db:"fcol"`
 	}
 	var rows []fk
 	q := `

@@ -144,9 +144,14 @@ type SchemaColumn struct {
 // parsed-tables contract (the same shape ParseSchemaLocalJob caches).
 // Index types must be UPPERCASE: the server compares them strictly.
 type ParsedField struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
-	Null bool   `json:"null"`
+	Name      string   `json:"name"`
+	Type      string   `json:"type"`
+	Null      bool     `json:"null"`
+	Length    int      `json:"length,omitempty"`
+	Unsigned  bool     `json:"unsigned,omitempty"`
+	Precision int      `json:"precision,omitempty"`
+	Scale     int      `json:"scale,omitempty"`
+	Values    []string `json:"values,omitempty"`
 }
 
 type ParsedIndexCol struct {

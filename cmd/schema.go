@@ -225,7 +225,7 @@ func printColumns(table string, cols []db.Column) {
 		if c.FKRef != "" {
 			extra += " FK->" + c.FKRef
 		}
-		fmt.Printf("  - %s %s %s%s\n", c.Name, c.Type, null, extra)
+		fmt.Printf("  - %s %s %s%s\n", c.Name, parse.DisplayType(c), null, extra)
 	}
 }
 

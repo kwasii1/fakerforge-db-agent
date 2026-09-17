@@ -8,13 +8,20 @@ import (
 )
 
 // Column is the introspected shape of one table column.
+// Constraint fields (Unsigned/Length/Precision/Scale/Values) are additive:
+// zero values mean "unknown" and are omitted from the upload payload.
 type Column struct {
-	Name     string
-	Type     string // normalized: lowercase base type, e.g. "varchar", "integer", "timestamp"
-	Nullable bool
-	IsPK     bool
-	Unique   bool
-	FKRef    string // "table.column" or ""
+	Name      string
+	Type      string // normalized: lowercase base type, e.g. "varchar", "integer", "timestamp"
+	Nullable  bool
+	IsPK      bool
+	Unique    bool
+	FKRef     string   // "table.column" or ""
+	Unsigned  bool     // MySQL unsigned integer
+	Length    int      // char/varchar max length, 0 = unknown/unbounded
+	Precision int      // decimal total digits, 0 = unknown
+	Scale     int      // decimal fractional digits, 0 = unknown
+	Values    []string // enum/set allowed values (MySQL), nil otherwise
 }
 
 // Driver abstracts postgres/mysql for connect, introspection, and inserts.

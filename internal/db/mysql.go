@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jmoiron/sqlx"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/jmoiron/sqlx"
 	"github.com/kwasii1/fakerforge-db-agent/internal/config"
 )
 
@@ -35,7 +35,7 @@ func openMySQL(c config.Connection, password string) (Driver, error) {
 }
 
 func (d *myDriver) DB() *sqlx.DB { return d.db }
-func (d *myDriver) Close() error  { return d.db.Close() }
+func (d *myDriver) Close() error { return d.db.Close() }
 
 func (d *myDriver) Ping() error {
 	if err := d.db.Ping(); err != nil {
@@ -68,10 +68,16 @@ func (d *myDriver) Introspect(table string) ([]Column, error) {
 		DataType string `db:"data_type"`
 		Nullable string `db:"nullable"`
 		ColKey   string `db:"col_key"`
+		FullType string `db:"full_type"`
+		MaxLen   *int64 `db:"max_len"`
+		NumPrec  *int64 `db:"num_prec"`
+		NumScale *int64 `db:"num_scale"`
 	}
 	var rows []row
 	q := `
-SELECT column_name AS col_name, data_type AS data_type, is_nullable AS nullable, column_key AS col_key
+SELECT column_name AS col_name, data_type AS data_type, is_nullable AS nullable, column_key AS col_key,
+       column_type AS full_type, character_maximum_length AS max_len,
+       numeric_precision AS num_prec, numeric_scale AS num_scale
 FROM information_schema.columns
 WHERE table_schema=DATABASE() AND table_name=?
 ORDER BY ordinal_position`
@@ -85,12 +91,17 @@ ORDER BY ordinal_position`
 	out := make([]Column, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, Column{
-			Name:     r.ColName,
-			Type:     normalizeType(r.DataType),
-			Nullable: strings.EqualFold(r.Nullable, "YES"),
-			IsPK:     r.ColKey == "PRI",
-			Unique:   r.ColKey == "UNI",
-			FKRef:    fks[r.ColName],
+			Name:      r.ColName,
+			Type:      normalizeType(r.DataType),
+			Nullable:  strings.EqualFold(r.Nullable, "YES"),
+			IsPK:      r.ColKey == "PRI",
+			Unique:    r.ColKey == "UNI",
+			FKRef:     fks[r.ColName],
+			Unsigned:  strings.Contains(strings.ToLower(r.FullType), "unsigned"),
+			Length:    intValue(r.MaxLen),
+			Precision: intValue(r.NumPrec),
+			Scale:     intValue(r.NumScale),
+			Values:    parseEnumValues(r.FullType),
 		})
 	}
 	return out, nil

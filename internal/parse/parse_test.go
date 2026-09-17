@@ -103,6 +103,77 @@ func TestBuildParsedTableSkipsMalformedFK(t *testing.T) {
 	}
 }
 
+func TestBuildParsedTableCarriesConstraints(t *testing.T) {
+	cols := []db.Column{
+		{Name: "id", Type: "int", Unsigned: true},
+		{Name: "email", Type: "varchar", Length: 255, Nullable: false, Unique: true},
+		{Name: "price", Type: "decimal", Precision: 8, Scale: 2, Nullable: true},
+		{Name: "status", Type: "enum", Values: []string{"a", "b"}, Nullable: true},
+	}
+	tbl := BuildParsedTable("t", "d", cols, nil)
+
+	if !tbl.Fields[0].Unsigned {
+		t.Fatal("unsigned flag lost")
+	}
+	if tbl.Fields[1].Length != 255 {
+		t.Fatalf("length = %d", tbl.Fields[1].Length)
+	}
+	if tbl.Fields[2].Precision != 8 || tbl.Fields[2].Scale != 2 {
+		t.Fatalf("precision/scale = %d/%d", tbl.Fields[2].Precision, tbl.Fields[2].Scale)
+	}
+	if len(tbl.Fields[3].Values) != 2 {
+		t.Fatalf("values = %v", tbl.Fields[3].Values)
+	}
+
+	for _, want := range []string{
+		`"id" int unsigned NOT NULL`,
+		`"email" varchar(255) NOT NULL`,
+		`"price" decimal(8,2) NULL`,
+		`"status" ENUM('a','b') NULL`,
+	} {
+		if !strings.Contains(tbl.SQL, want) {
+			t.Fatalf("DDL missing %q:\n%s", want, tbl.SQL)
+		}
+	}
+}
+
+func TestBuildParsedTableDropsTextLengths(t *testing.T) {
+	cols := []db.Column{
+		{Name: "body", Type: "mediumtext", Length: 16777215},
+		{Name: "payload", Type: "longtext", Length: 4294967295},
+		{Name: "name", Type: "varchar", Length: 255},
+	}
+	tbl := BuildParsedTable("t", "d", cols, nil)
+
+	if tbl.Fields[0].Length != 0 || tbl.Fields[1].Length != 0 {
+		t.Fatalf("text/blob lengths should be dropped: %+v", tbl.Fields)
+	}
+	if tbl.Fields[2].Length != 255 {
+		t.Fatalf("varchar length should be kept: %+v", tbl.Fields[2])
+	}
+	if strings.Contains(tbl.SQL, "16777215") || strings.Contains(tbl.SQL, "4294967295") {
+		t.Fatalf("DDL should not carry storage caps:\n%s", tbl.SQL)
+	}
+}
+
+func TestDisplayType(t *testing.T) {
+	cases := []struct {
+		col  db.Column
+		want string
+	}{
+		{db.Column{Type: "varchar", Length: 100}, "varchar(100)"},
+		{db.Column{Type: "int", Unsigned: true}, "int unsigned"},
+		{db.Column{Type: "decimal", Precision: 8, Scale: 2}, "decimal(8,2)"},
+		{db.Column{Type: "enum", Values: []string{"a", "b"}}, "enum('a','b')"},
+		{db.Column{Type: "text"}, "text"},
+	}
+	for _, tc := range cases {
+		if got := DisplayType(tc.col); got != tc.want {
+			t.Fatalf("DisplayType(%+v) = %q, want %q", tc.col, got, tc.want)
+		}
+	}
+}
+
 func TestJSONContractKeys(t *testing.T) {
 	inSet := map[string]bool{"users": true, "orgs": true}
 	tbl := BuildParsedTable("users", "myapp", testCols(), inSet)

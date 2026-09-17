@@ -27,6 +27,57 @@ func normalizeType(t string) string {
 	return strings.TrimSpace(t)
 }
 
+// intValue dereferences a nullable information_schema integer (NULL → 0,
+// meaning "unknown" for Length/Precision/Scale).
+func intValue(v *int64) int {
+	if v == nil || *v < 0 {
+		return 0
+	}
+	return int(*v)
+}
+
+// parseEnumValues extracts allowed values from a MySQL COLUMN_TYPE like
+// "enum('a','b”c')" or "set('x','y')". Returns nil for other types.
+// MySQL escapes embedded quotes by doubling them.
+func parseEnumValues(columnType string) []string {
+	lower := strings.ToLower(strings.TrimSpace(columnType))
+	var prefix string
+	switch {
+	case strings.HasPrefix(lower, "enum("):
+		prefix = "enum("
+	case strings.HasPrefix(lower, "set("):
+		prefix = "set("
+	default:
+		return nil
+	}
+	inner := strings.TrimSpace(columnType[len(prefix):])
+	inner = strings.TrimSuffix(inner, ")")
+
+	var values []string
+	var cur strings.Builder
+	inQuote := false
+	for i := 0; i < len(inner); i++ {
+		ch := inner[i]
+		if ch == '\'' {
+			if inQuote && i+1 < len(inner) && inner[i+1] == '\'' {
+				cur.WriteByte('\'')
+				i++
+				continue
+			}
+			inQuote = !inQuote
+			continue
+		}
+		if ch == ',' && !inQuote {
+			values = append(values, cur.String())
+			cur.Reset()
+			continue
+		}
+		cur.WriteByte(ch)
+	}
+	values = append(values, cur.String())
+	return values
+}
+
 // ToAPISchema converts introspected columns to the upload shape.
 func ToAPISchema(cols []Column) []api.SchemaColumn {
 	out := make([]api.SchemaColumn, 0, len(cols))

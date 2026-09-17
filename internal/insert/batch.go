@@ -1,6 +1,7 @@
 package insert
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -48,7 +49,7 @@ func Batch(db *sqlx.DB, driver, table string, columns []string, rows []map[strin
 				sb.WriteString(", ")
 			}
 			sb.WriteString(ph(i*len(columns) + j + 1))
-			args = append(args, r[c])
+			args = append(args, normalizeValue(r[c]))
 		}
 		sb.WriteString(")")
 	}
@@ -104,7 +105,7 @@ func TruncateTables(db *sqlx.DB, driver string, tables []string) error {
 		}
 		defer func() { _, _ = db.Exec("SET FOREIGN_KEY_CHECKS=1") }()
 		for i := len(tables) - 1; i >= 0; i-- {
-			if _, err := db.Exec(buildTruncateSQL(driver, tables[i : i+1])); err != nil {
+			if _, err := db.Exec(buildTruncateSQL(driver, tables[i:i+1])); err != nil {
 				return fmt.Errorf("truncate %s: %w", tables[i], err)
 			}
 		}
@@ -123,4 +124,41 @@ func quoteIdent(driver, ident string) string {
 		return "`" + ident + "`"
 	}
 	return `"` + ident + `"`
+}
+
+// normalizeValue converts decoded JSONL values into driver-bindable args.
+// Generated rows may contain nested structures that neither driver can
+// bind, so they are normalized here, at the single choke point for DB
+// writes:
+//
+//   - {"date": "..."} unwraps to the date string (the same shape the
+//     server API normalizes).
+//   - {"date": "...", "timezone_type": N, "timezone": "..."} is a PHP
+//     DateTime serialized to JSON. The date string is the value; the
+//     timezone keys are decode artifacts. (A genuine data object that
+//     merely contains a "date" key but no "timezone_type" still encodes
+//     to JSON below.)
+//   - Any other map/slice (e.g. from the `json()` faker method) encodes
+//     to a JSON string — the correct representation for TEXT-like columns
+//     (and coercible by Postgres json/jsonb columns).
+func normalizeValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		if d, ok := t["date"].(string); ok {
+			if _, hasTZ := t["timezone_type"]; hasTZ || len(t) == 1 {
+				return d
+			}
+		}
+		if b, err := json.Marshal(t); err == nil {
+			return string(b)
+		}
+		return fmt.Sprintf("%v", t)
+	case []any:
+		if b, err := json.Marshal(t); err == nil {
+			return string(b)
+		}
+		return fmt.Sprintf("%v", t)
+	default:
+		return v
+	}
 }

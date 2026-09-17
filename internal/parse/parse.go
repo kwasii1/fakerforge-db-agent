@@ -47,7 +47,19 @@ func BuildParsedTable(table, database string, cols []db.Column, inSet map[string
 
 	var pkCols []IndexCol
 	for _, c := range cols {
-		t.Fields = append(t.Fields, Field{Name: c.Name, Type: c.Type, Null: c.Nullable})
+		// Length is only a real constraint for declared-limit types.
+		// TEXT/BLOB families report their inherent storage cap (up to 4GB
+		// for longtext), which is not a constraint: drop it so prompts
+		// stay clean and server validation passes.
+		length := c.Length
+		if !sizedType(c.Type) {
+			length = 0
+		}
+		t.Fields = append(t.Fields, Field{
+			Name: c.Name, Type: c.Type, Null: c.Nullable,
+			Length: length, Unsigned: c.Unsigned,
+			Precision: c.Precision, Scale: c.Scale, Values: c.Values,
+		})
 		if c.IsPK {
 			pkCols = append(pkCols, IndexCol{Name: c.Name})
 		}
@@ -80,6 +92,16 @@ func BuildParsedTable(table, database string, cols []db.Column, inSet map[string
 	return t
 }
 
+// sizedType reports whether Length is a declared constraint for the
+// base type (as opposed to an inherent storage cap).
+func sizedType(t string) bool {
+	switch ddlType(t) {
+	case "varchar", "char", "binary", "varbinary":
+		return true
+	}
+	return false
+}
+
 // splitFKRef splits "table.column" into its parts.
 func splitFKRef(ref string) (string, string, bool) {
 	parts := strings.SplitN(ref, ".", 2)
@@ -101,7 +123,7 @@ func SynthesizeDDL(table string, fields []Field, indexes []Index) string {
 		if f.Null {
 			null = "NULL"
 		}
-		defs = append(defs, fmt.Sprintf("  %s %s %s", quoteIdent(f.Name), ddlType(f.Type), null))
+		defs = append(defs, fmt.Sprintf("  %s %s %s", quoteIdent(f.Name), ddlTypeFor(f), null))
 	}
 	for _, idx := range indexes {
 		switch idx.Type {
@@ -148,6 +170,52 @@ func ddlType(t string) string {
 		t = strings.TrimSpace(t[:i])
 	}
 	return t
+}
+
+// ddlTypeFor renders a field's full DDL type with constraints: length,
+// unsigned, precision/scale, and inline ENUM/SET values (MySQL-style
+// single quotes, embedded quotes doubled).
+func ddlTypeFor(f Field) string {
+	base := ddlType(f.Type)
+	if (base == "enum" || base == "set") && len(f.Values) > 0 {
+		quoted := make([]string, 0, len(f.Values))
+		for _, v := range f.Values {
+			quoted = append(quoted, "'"+strings.ReplaceAll(v, "'", "''")+"'")
+		}
+		return strings.ToUpper(base) + "(" + strings.Join(quoted, ",") + ")"
+	}
+	switch base {
+	case "varchar", "char", "binary", "varbinary":
+		if f.Length > 0 {
+			return base + "(" + strconv.Itoa(f.Length) + ")"
+		}
+	case "decimal", "numeric", "float", "double":
+		if f.Precision > 0 {
+			if f.Scale > 0 {
+				return base + "(" + strconv.Itoa(f.Precision) + "," + strconv.Itoa(f.Scale) + ")"
+			}
+			return base + "(" + strconv.Itoa(f.Precision) + ")"
+		}
+	}
+	if f.Unsigned {
+		return base + " unsigned"
+	}
+	return base
+}
+
+// DisplayType renders a compact human-readable type for the transparency
+// print: varchar(255), int unsigned, enum('a','b').
+func DisplayType(c db.Column) string {
+	f := Field{
+		Type: c.Type, Length: c.Length, Unsigned: c.Unsigned,
+		Precision: c.Precision, Scale: c.Scale, Values: c.Values,
+	}
+	rendered := ddlTypeFor(f)
+	// DDL renders ENUM in caps; display prefers the base name style.
+	if strings.HasPrefix(rendered, "ENUM(") || strings.HasPrefix(rendered, "SET(") {
+		return strings.ToLower(rendered[:4]) + rendered[4:]
+	}
+	return rendered
 }
 
 // Fingerprint returns the pull idempotency key: sha256 hex of
