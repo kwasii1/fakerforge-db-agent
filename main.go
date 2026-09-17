@@ -74,12 +74,13 @@ Usage:
   fakerforge logout
   fakerforge whoami
 
+  fakerforge connect                         # interactive prompts
   fakerforge connect --name NAME --driver postgres|mysql --host H --port P --database D --user U [--password P]
   fakerforge connect --list
   fakerforge connect --remove NAME
   fakerforge connect --default NAME
 
-  fakerforge schema pull --connection NAME --table TABLE
+  fakerforge schema pull --connection NAME [--tables A,B] [--rows N] [--force] [--regenerate] [--async]
 
   fakerforge schemas list [--table TABLE] [--format table|json]
   fakerforge schemas show SCHEMA_ID [--table TABLE]

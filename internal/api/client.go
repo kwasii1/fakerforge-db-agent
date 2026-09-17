@@ -140,6 +140,34 @@ type SchemaColumn struct {
 	FKRef    string `json:"fk_ref,omitempty"` // "table.column"
 }
 
+// ParsedField/ParsedIndexCol/ParsedIndex/ParsedTable mirror the server's
+// parsed-tables contract (the same shape ParseSchemaLocalJob caches).
+// Index types must be UPPERCASE: the server compares them strictly.
+type ParsedField struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+	Null bool   `json:"null"`
+}
+
+type ParsedIndexCol struct {
+	Name string `json:"name"`
+}
+
+type ParsedIndex struct {
+	Type     string           `json:"type"`
+	Cols     []ParsedIndexCol `json:"cols"`
+	RefTable string           `json:"ref_table,omitempty"`
+	RefCols  []ParsedIndexCol `json:"ref_cols,omitempty"`
+}
+
+type ParsedTable struct {
+	Name     string        `json:"name"`
+	Database string        `json:"database"`
+	Fields   []ParsedField `json:"fields"`
+	Indexes  []ParsedIndex `json:"indexes"`
+	SQL      string        `json:"sql"`
+}
+
 type CreateSchemaRequest struct {
 	Table   string         `json:"table"`
 	Columns []SchemaColumn `json:"columns"`
@@ -176,6 +204,130 @@ func (c *Client) CreateSchema(table string, cols []SchemaColumn) (CreateSchemaRe
 		}
 	}
 	return out, fmt.Errorf("POST /api/schemas: response missing schema_id")
+}
+
+// ── POST /api/schemas (multi-table pull) ───────────────────────────────────
+
+type CreatePullRequest struct {
+	Name        string                 `json:"name"`
+	Fingerprint string                 `json:"fingerprint"`
+	Rows        int                    `json:"rows"`
+	Force       bool                   `json:"force,omitempty"`
+	Tables      map[string]ParsedTable `json:"tables"`
+}
+
+type CreatePullResponse struct {
+	SchemaID     string         `json:"schema_id"`
+	Reused       bool           `json:"reused"`
+	TablesQueued []string       `json:"tables_queued"`
+	RowCounts    map[string]int `json:"row_counts"`
+	DashboardURL string         `json:"dashboard_url"`
+}
+
+// CreatePull uploads CLI-parsed tables (shape only, never row data).
+// The server validates, writes cache, and creates the schema without
+// any parsing of its own.
+func (c *Client) CreatePull(req CreatePullRequest) (CreatePullResponse, error) {
+	var out CreatePullResponse
+	if err := c.post("/api/schemas", req, &out); err != nil {
+		return out, err
+	}
+	if out.SchemaID == "" {
+		return out, fmt.Errorf("POST /api/schemas: response missing schema_id")
+	}
+	return out, nil
+}
+
+// ── POST /api/schemas/{id}/generate ─────────────────────────────────────────
+
+type GenerateRequest struct {
+	Rows int `json:"rows"`
+}
+
+type GenerateResponse struct {
+	SchemaID     string         `json:"schema_id"`
+	TablesQueued []string       `json:"tables_queued"`
+	RowCounts    map[string]int `json:"row_counts"`
+}
+
+// GenerateSchema kicks off data generation for an already-parsed schema.
+func (c *Client) GenerateSchema(id string, rows int) (GenerateResponse, error) {
+	var out GenerateResponse
+	path := "/api/schemas/" + url.PathEscape(id) + "/generate"
+	if err := c.post(path, GenerateRequest{Rows: rows}, &out); err != nil {
+		return out, err
+	}
+	if out.SchemaID == "" {
+		out.SchemaID = id
+	}
+	return out, nil
+}
+
+// ── GET /api/schemas/{id}/progress ──────────────────────────────────────────
+
+type StageStatus struct {
+	Status  string `json:"status"`
+	Count   int    `json:"count,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+type ProgressTable struct {
+	Table     string `json:"table"`
+	Requested int    `json:"requested"`
+	Generated int    `json:"generated"`
+	Status    string `json:"status"`
+}
+
+type GenerationProgress struct {
+	Status string          `json:"status"`
+	Tables []ProgressTable `json:"tables"`
+}
+
+type SchemaProgress struct {
+	SchemaID      string             `json:"schema_id"`
+	Parsing       StageStatus        `json:"parsing"`
+	Relationships StageStatus        `json:"relationships"`
+	Generation    GenerationProgress `json:"generation"`
+	Overall       string             `json:"overall"`
+	Error         string             `json:"error,omitempty"`
+}
+
+// GetProgress polls the pipeline state for a schema.
+func (c *Client) GetProgress(id string) (SchemaProgress, error) {
+	var out SchemaProgress
+	path := "/api/schemas/" + url.PathEscape(id) + "/progress"
+	if err := c.get(path, &out); err != nil {
+		return out, err
+	}
+	if out.SchemaID == "" {
+		out.SchemaID = id
+	}
+	return out, nil
+}
+
+func (c *Client) post(path string, body any, out any) error {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("encode POST %s: %w", path, err)
+	}
+	r, err := c.req("POST", path, strings.NewReader(string(data)))
+	if err != nil {
+		return err
+	}
+	resp, err := c.HTTP.Do(r)
+	if err != nil {
+		return fmt.Errorf("reach api: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 && resp.StatusCode != 201 && resp.StatusCode != 202 {
+		return decodeErr(resp)
+	}
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return fmt.Errorf("decode POST %s: %w", path, err)
+		}
+	}
+	return nil
 }
 
 // ── GET /api/schemas (list) ──────────────────────────────────────────────────

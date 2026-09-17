@@ -21,6 +21,7 @@ type Column struct {
 type Driver interface {
 	Ping() error
 	TableExists(table string) (bool, error)
+	ListTables() ([]string, error)
 	Introspect(table string) ([]Column, error)
 	DB() *sqlx.DB
 	Close() error

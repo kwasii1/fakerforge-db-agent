@@ -50,6 +50,29 @@ func stub(t *testing.T) (*Client, func()) {
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		_, _ = w.Write([]byte("{\"email\":\"a@x.com\"}\n{\"email\":\"b@x.com\"}\n"))
 	})
+	mux.HandleFunc("/api/schemas/d1/generate", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			w.WriteHeader(405)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(GenerateResponse{
+			SchemaID:     "d1",
+			TablesQueued: []string{"users", "orders"},
+			RowCounts:    map[string]int{"users": 100, "orders": 100},
+		})
+	})
+	mux.HandleFunc("/api/schemas/d1/progress", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(SchemaProgress{
+			SchemaID:      "d1",
+			Parsing:       StageStatus{Status: "complete"},
+			Relationships: StageStatus{Status: "complete", Count: 1},
+			Generation: GenerationProgress{Status: "generating", Tables: []ProgressTable{
+				{Table: "users", Requested: 100, Generated: 100, Status: "ready"},
+				{Table: "orders", Requested: 100, Generated: 45, Status: "generating"},
+			}},
+			Overall: "generating",
+		})
+	})
 	mux.HandleFunc("/api/cli/latest", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"version": Version})
 	})
@@ -70,6 +93,36 @@ func TestMe(t *testing.T) {
 	bad := New(c.BaseURL, "bad")
 	if _, err := bad.Me(); err == nil {
 		t.Fatal("expected auth error")
+	}
+}
+
+func TestPull(t *testing.T) {
+	c, done := stub(t)
+	defer done()
+	out, err := c.CreatePull(CreatePullRequest{
+		Name:        "myapp",
+		Fingerprint: "fp123",
+		Rows:        100,
+		Tables: map[string]ParsedTable{
+			"users": {Name: "users", Database: "myapp",
+				Fields:  []ParsedField{{Name: "id", Type: "integer"}},
+				Indexes: []ParsedIndex{{Type: "PRIMARY", Cols: []ParsedIndexCol{{Name: "id"}}}},
+				SQL:     "CREATE TABLE \"users\" (\n  \"id\" integer NOT NULL,\n  PRIMARY KEY (\"id\")\n);\n"},
+		},
+	})
+	if err != nil || out.SchemaID != "sch_123" {
+		t.Fatalf("pull: %+v %v", out, err)
+	}
+	gen, err := c.GenerateSchema("d1", 100)
+	if err != nil || len(gen.TablesQueued) != 2 || gen.RowCounts["users"] != 100 {
+		t.Fatalf("generate: %+v %v", gen, err)
+	}
+	p, err := c.GetProgress("d1")
+	if err != nil || p.Overall != "generating" || p.Parsing.Status != "complete" {
+		t.Fatalf("progress: %+v %v", p, err)
+	}
+	if len(p.Generation.Tables) != 2 || p.Generation.Tables[1].Generated != 45 {
+		t.Fatalf("progress tables: %+v", p.Generation.Tables)
 	}
 }
 

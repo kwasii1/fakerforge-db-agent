@@ -29,13 +29,17 @@ export FAKERFORGE_API_URL=http://localhost:8000
 fakerforge login                 # validates GET /api/me, saves key in OS keychain
 fakerforge whoami
 
+fakerforge connect                         # interactive: prompts for name, driver, host, port, database, user, password
+# or fully flagged (scriptable):
 fakerforge connect --name local --driver postgres \
   --host localhost --port 5432 --database myapp --user postgres
 # password via --password, FAKERFORGE_DB_PASSWORD, or interactive prompt
 fakerforge connect --list
 
-fakerforge schema pull --connection local --table users
-# prints every column being sent (shape only, never rows) → returns schema_id
+fakerforge schema pull --connection local [--tables users,orders] [--rows 100]
+# introspects + builds parsed tables locally (no server parsing, no AI),
+# uploads shape only → generates → polls to ready (or --async to return early)
+# re-pulls are idempotent via fingerprint (--force / --regenerate to redo)
 
 fakerforge schemas list --format table
 fakerforge schemas show <schema-id>            # tables with rows + status
@@ -54,7 +58,7 @@ fakerforge status   # API auth + per-connection ping + CLI version check
 | `login [--api-key]` | flag > `FAKERFORGE_API_KEY` > prompt; fails loudly on bad key |
 | `logout`, `whoami` | keychain delete / `GET /api/me` |
 | `connect` | `--list`, `--remove NAME`, `--default NAME`; `Ping()` before save; first conn becomes default |
-| `schema pull` | introspects `information_schema`, uploads shape to `POST /api/schemas` |
+| `schema pull` | multi-table introspect → CLI-built parsed tables + DDL → `POST /api/schemas` → generate → poll `…/progress` to ready; `--tables`, `--rows` (def. 100), `--force`, `--regenerate`, `--async`, `--timeout`, `--interval` |
 | `schemas list` | `GET /api/schemas[?table=]` → `SCHEMA ID NAME TABLES CREATED`; `--format json` for CI |
 | `schemas show` | `GET /api/schemas/{id}[?table=]` → per-table rows + status; with `--table`, columns/rules + sample |
 | `push` | checks conn + table + `ready` status + column-subset compat; streams JSONL in `--batch-size` txns (default 500); `--dry-run`; prod hosts need `--yes` |

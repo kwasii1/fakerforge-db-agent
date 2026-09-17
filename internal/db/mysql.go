@@ -53,6 +53,15 @@ func (d *myDriver) TableExists(table string) (bool, error) {
 	return n > 0, nil
 }
 
+func (d *myDriver) ListTables() ([]string, error) {
+	var tables []string
+	q := `SELECT table_name FROM information_schema.tables WHERE table_schema=DATABASE() AND table_type='BASE TABLE' ORDER BY table_name`
+	if err := d.db.Select(&tables, q); err != nil {
+		return nil, fmt.Errorf("list tables: %w", err)
+	}
+	return tables, nil
+}
+
 func (d *myDriver) Introspect(table string) ([]Column, error) {
 	type row struct {
 		ColName  string `db:"col_name"`
