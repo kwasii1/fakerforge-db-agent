@@ -26,18 +26,14 @@ func run(args []string) int {
 		return cmd.RunWhoami(args[1:])
 	case "connect":
 		return cmd.RunConnect(args[1:])
-	case "schema":
-		if len(args) >= 2 && args[1] == "pull" {
-			return cmd.RunSchemaPull(args[2:])
-		}
-		fmt.Println("usage: fakerforge schema pull --connection NAME --table TABLE")
-		return 2
-	case "schemas":
+	case "schema", "schemas":
 		if len(args) < 2 {
-			fmt.Println("usage: fakerforge schemas list|show ...")
+			fmt.Println("usage: fakerforge schema pull --connection NAME [--tables A,B] | fakerforge schemas list|show ...")
 			return 2
 		}
 		switch args[1] {
+		case "pull":
+			return cmd.RunSchemaPull(args[2:])
 		case "list":
 			return cmd.RunSchemasList(args[2:])
 		case "show":
@@ -80,7 +76,7 @@ Usage:
   fakerforge connect --remove NAME
   fakerforge connect --default NAME
 
-  fakerforge schema pull --connection NAME [--tables A,B] [--rows N] [--force] [--regenerate] [--async]
+  fakerforge schema pull --connection NAME [--tables A,B] [--rows N] [--force] [--regenerate] [--async] [--no-progress]
 
   fakerforge schemas list [--table TABLE] [--format table|json]
   fakerforge schemas show SCHEMA_ID [--table TABLE]

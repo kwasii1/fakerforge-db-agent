@@ -12,13 +12,14 @@ import (
 	"github.com/kwasii1/fakerforge-db-agent/internal/config"
 	"github.com/kwasii1/fakerforge-db-agent/internal/db"
 	"github.com/kwasii1/fakerforge-db-agent/internal/parse"
+	"golang.org/x/term"
 )
 
 // RunSchemaPull implements:
 //
 //	fakerforge schema pull --connection NAME [--tables A,B] [--table T]
 //	  [--rows N] [--name NAME] [--force] [--regenerate] [--async]
-//	  [--timeout D] [--interval D] [--api-url URL] [--api-key KEY]
+//	  [--timeout D] [--interval D] [--no-progress] [--api-url URL] [--api-key KEY]
 //
 // Introspects the database, builds the parsed-tables structure locally
 // (no server-side parsing, no AI), uploads it, then drives the pipeline
@@ -35,6 +36,7 @@ func RunSchemaPull(args []string) int {
 	async := fs.Bool("async", false, "Return after upload without waiting for readiness")
 	timeout := fs.Duration("timeout", 20*time.Minute, "Max wait for readiness")
 	interval := fs.Duration("interval", 3*time.Second, "Progress poll interval")
+	noProgress := fs.Bool("no-progress", false, "Suppress live progress, print only the final result")
 	apiURL := fs.String("api-url", "", "API base URL")
 	apiKey := fs.String("api-key", "", "API key override")
 	if err := fs.Parse(args); err != nil {
@@ -149,7 +151,7 @@ func RunSchemaPull(args []string) int {
 		return 1
 	}
 
-	final, err := pollProgress(client, resp.SchemaID, *interval, *timeout, os.Stdout)
+	final, err := pollProgress(client, resp.SchemaID, *interval, *timeout, os.Stdout, *noProgress)
 	if err != nil {
 		fmt.Printf("\n%s\n", err)
 		return 1
@@ -230,19 +232,59 @@ func printColumns(table string, cols []db.Column) {
 }
 
 // pollProgress polls GET …/progress until the schema is ready or failed.
-// Progress lines print only when the rendered state changes.
-func pollProgress(client *api.Client, schemaID string, interval, timeout time.Duration, out io.Writer) (api.SchemaProgress, error) {
+//
+// Rendering (stdlib only, no new dependencies):
+//   - TTY (os.Stdout is a terminal): live in-place block — one overall bar
+//     plus one bar per table — rewritten via ANSI cursor-up + clear-line.
+//   - Piped / non-TTY (tests, CI, logs): single-line summary printed only
+//     when the rendered state changes.
+//   - noProgress: suppress intermediate output, print only the final state.
+func pollProgress(client *api.Client, schemaID string, interval, timeout time.Duration, out io.Writer, noProgress bool) (api.SchemaProgress, error) {
 	deadline := time.Now().Add(timeout)
+	tty := isTTYWriter(out)
 	var last string
+	prevLines := 0
+	spinIdx := 0
 	for {
 		p, err := client.GetProgress(schemaID)
 		if err != nil {
+			if tty && prevLines > 0 {
+				fmt.Fprintln(out)
+			}
 			return p, fmt.Errorf("progress poll failed: %w", err)
 		}
-		if line := formatProgress(p); line != last {
-			fmt.Fprintln(out, line)
-			last = line
+		done := p.Overall == "ready" || p.Overall == "failed"
+
+		if !noProgress || done {
+			if tty {
+				lines := renderPullLines(p, spinnerFrame(spinIdx))
+				key := strings.Join(lines, "\n")
+				// Spinner is embedded in the lines, so the key changes every
+				// poll — this keeps the TTY alive during long parsing stages
+				// while identical non-spinner states still dedupe via last.
+				if key != last || done {
+					if prevLines > 0 {
+						fmt.Fprintf(out, "\x1b[%dA", prevLines)
+					}
+					for _, ln := range lines {
+						fmt.Fprintf(out, "\x1b[2K\r%s\n", ln)
+					}
+					// New block shorter than the previous one: clear leftovers.
+					if len(lines) < prevLines {
+						fmt.Fprint(out, "\x1b[J")
+					}
+					last = key
+					prevLines = len(lines)
+				}
+			} else {
+				if line := formatProgress(p); line != last {
+					fmt.Fprintln(out, line)
+					last = line
+				}
+			}
 		}
+		spinIdx++
+
 		switch p.Overall {
 		case "ready":
 			return p, nil
@@ -253,29 +295,146 @@ func pollProgress(client *api.Client, schemaID string, interval, timeout time.Du
 			return p, fmt.Errorf("generation failed (no detail — check the dashboard)")
 		}
 		if time.Now().After(deadline) {
+			if tty && prevLines > 0 {
+				fmt.Fprintln(out)
+			}
 			return p, fmt.Errorf("timed out after %s waiting for readiness (state: %s)", timeout, p.Overall)
 		}
 		time.Sleep(interval)
 	}
 }
 
+// barWidth is the fixed width of every ASCII progress bar.
+const barWidth = 20
+
+// maxDetailTables caps per-table lines so wide schemas don't flood the terminal.
+const maxDetailTables = 10
+
+var spinnerFrames = []string{"|", "/", "-", "\\"}
+
+func spinnerFrame(i int) string {
+	return spinnerFrames[i%len(spinnerFrames)]
+}
+
+func isTTYWriter(out io.Writer) bool {
+	f, ok := out.(*os.File)
+	if !ok {
+		return false
+	}
+	return term.IsTerminal(int(f.Fd()))
+}
+
+// renderBar returns e.g. "[######--------------]" for gen/req.
+// req <= 0 yields an indeterminate empty bar; gen is clamped to [0, req].
+func renderBar(gen, req, width int) string {
+	if width < 5 {
+		width = 5
+	}
+	if req <= 0 {
+		return "[" + strings.Repeat("-", width) + "]"
+	}
+	if gen < 0 {
+		gen = 0
+	}
+	if gen > req {
+		gen = req
+	}
+	filled := gen * width / req
+	return "[" + strings.Repeat("#", filled) + strings.Repeat("-", width-filled) + "]"
+}
+
+func barPercent(gen, req int) string {
+	if req <= 0 {
+		return "--%"
+	}
+	if gen < 0 {
+		gen = 0
+	}
+	pct := gen * 100 / req
+	if pct > 100 {
+		pct = 100
+	}
+	return fmt.Sprintf("%3d%%", pct)
+}
+
+func pullTotals(p api.SchemaProgress) (gen, req int) {
+	for _, t := range p.Generation.Tables {
+		gen += t.Generated
+		req += t.Requested
+	}
+	return gen, req
+}
+
+// renderPullLines builds the TTY block: one overall line plus one line per
+// table (capped). Indeterminate stages keep a spinner instead of a bar.
+func renderPullLines(p api.SchemaProgress, spin string) []string {
+	switch p.Overall {
+	case "failed":
+		return []string{"failed"}
+	case "relationships":
+		return []string{fmt.Sprintf("%s relationships (%d found)…", spin, p.Relationships.Count)}
+	case "generating", "ready":
+		gen, req := pullTotals(p)
+		// No per-table detail yet (e.g. queued but not started): fall back
+		// to a single overall line instead of an empty block.
+		if len(p.Generation.Tables) == 0 {
+			if p.Overall == "ready" {
+				return []string{"ready"}
+			}
+			return []string{fmt.Sprintf("%s generating %s %s (%d/%d)", spin, renderBar(gen, req, barWidth), barPercent(gen, req), gen, req)}
+		}
+		head := fmt.Sprintf("%s generating %s %s (%d/%d)", spin, renderBar(gen, req, barWidth), barPercent(gen, req), gen, req)
+		if p.Overall == "ready" {
+			head = fmt.Sprintf("ready %s %s (%d/%d)", renderBar(gen, req, barWidth), barPercent(gen, req), gen, req)
+		}
+		lines := []string{head}
+		shown := p.Generation.Tables
+		extra := 0
+		if len(shown) > maxDetailTables {
+			extra = len(shown) - maxDetailTables
+			shown = shown[:maxDetailTables]
+		}
+		for _, t := range shown {
+			lines = append(lines, fmt.Sprintf("  %s %s %s (%d/%d)", t.Table, renderBar(t.Generated, t.Requested, barWidth), barPercent(t.Generated, t.Requested), t.Generated, t.Requested))
+		}
+		if extra > 0 {
+			lines = append(lines, fmt.Sprintf("  … +%d more", extra))
+		}
+		return lines
+	default:
+		return []string{fmt.Sprintf("%s parsing…", spin)}
+	}
+}
+
+// formatProgress is the non-TTY single-line summary: overall bar + percent +
+// per-table counts. Printed only when changed.
 func formatProgress(p api.SchemaProgress) string {
 	if p.Overall == "failed" {
 		return "failed"
 	}
-	parts := make([]string, 0, len(p.Generation.Tables))
-	for _, t := range p.Generation.Tables {
-		parts = append(parts, fmt.Sprintf("%s %d/%d", t.Table, t.Generated, t.Requested))
-	}
-	detail := ""
-	if len(parts) > 0 {
-		detail = " " + strings.Join(parts, ", ")
-	}
 	switch p.Overall {
 	case "ready":
-		return "ready:" + detail
+		gen, req := pullTotals(p)
+		parts := make([]string, 0, len(p.Generation.Tables))
+		for _, t := range p.Generation.Tables {
+			parts = append(parts, fmt.Sprintf("%s %d/%d", t.Table, t.Generated, t.Requested))
+		}
+		detail := ""
+		if len(parts) > 0 {
+			detail = " " + strings.Join(parts, ", ")
+		}
+		return fmt.Sprintf("ready %s %s (%d/%d)%s", renderBar(gen, req, barWidth), barPercent(gen, req), gen, req, detail)
 	case "generating":
-		return "generating" + detail
+		gen, req := pullTotals(p)
+		parts := make([]string, 0, len(p.Generation.Tables))
+		for _, t := range p.Generation.Tables {
+			parts = append(parts, fmt.Sprintf("%s %d/%d", t.Table, t.Generated, t.Requested))
+		}
+		detail := ""
+		if len(parts) > 0 {
+			detail = " " + strings.Join(parts, ", ")
+		}
+		return fmt.Sprintf("generating %s %s (%d/%d)%s", renderBar(gen, req, barWidth), barPercent(gen, req), gen, req, detail)
 	case "relationships":
 		return fmt.Sprintf("relationships (%d found)…", p.Relationships.Count)
 	default:

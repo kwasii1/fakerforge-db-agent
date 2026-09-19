@@ -38,7 +38,9 @@ fakerforge connect --list
 
 fakerforge schema pull --connection local [--tables users,orders] [--rows 100]
 # introspects + builds parsed tables locally (no server parsing, no AI),
-# uploads shape only → generates → polls to ready (or --async to return early)
+# uploads shape only → generates → polls to ready with a live progress bar
+# (overall + per-table; TTY only, single-line fallback when piped; --no-progress for CI)
+# (or --async to return early)
 # re-pulls are idempotent via fingerprint (--force / --regenerate to redo)
 
 fakerforge schemas list --format table
@@ -60,7 +62,7 @@ fakerforge status   # API auth + per-connection ping + CLI version check
 | `login [--api-key]` | flag > `FAKERFORGE_API_KEY` > prompt; fails loudly on bad key |
 | `logout`, `whoami` | keychain delete / `GET /api/me` |
 | `connect` | `--list`, `--remove NAME`, `--default NAME`; `Ping()` before save; first conn becomes default |
-| `schema pull` | multi-table introspect → CLI-built parsed tables + DDL → `POST /api/schemas` → generate → poll `…/progress` to ready; `--tables`, `--rows` (def. 100), `--force`, `--regenerate`, `--async`, `--timeout`, `--interval` |
+| `schema pull` | multi-table introspect → CLI-built parsed tables + DDL → `POST /api/schemas` → generate → poll `…/progress` to ready with live overall + per-table bar; `--tables`, `--rows` (def. 100), `--force`, `--regenerate`, `--async`, `--no-progress`, `--timeout`, `--interval` |
 | `schemas list` | `GET /api/schemas[?table=]` → `SCHEMA ID NAME TABLES CREATED`; `--format json` for CI |
 | `schemas show` | `GET /api/schemas/{id}[?table=]` → per-table rows + status; with `--table`, columns/rules + sample |
 | `push` | `--table` for single-table append; otherwise TRUNCATE + INSERT all ready tables parents-first (always confirmed unless `--yes`); `--append` skips truncate; `--dry-run`; per-table subset checks; abort on first failure with tallies |
