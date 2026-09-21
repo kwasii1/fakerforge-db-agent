@@ -1,0 +1,6 @@
+fakerforge
+fakerforge-*
+/dist/
+*.test
+*.out
+AGENT.md
