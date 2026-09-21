@@ -123,6 +123,10 @@ WHERE tc.table_schema='public' AND tc.table_name=$1 AND tc.constraint_type='PRIM
 	return m, nil
 }
 
+// uniqueCols returns columns that are unique on their own. Columns that are
+// only unique as part of a composite constraint are excluded: a value in a
+// composite UNIQUE(a,b) may legitimately repeat, so treating it as
+// individually unique would make the row validator reject valid data.
 func (d *pgDriver) uniqueCols(table string) (map[string]bool, error) {
 	m := map[string]bool{}
 	var cols []string
@@ -131,7 +135,16 @@ SELECT kcu.column_name
 FROM information_schema.table_constraints tc
 JOIN information_schema.key_column_usage kcu
   ON tc.constraint_name=kcu.constraint_name AND tc.table_schema=kcu.table_schema
-WHERE tc.table_schema='public' AND tc.table_name=$1 AND tc.constraint_type='UNIQUE'`
+WHERE tc.table_schema='public' AND tc.table_name=$1 AND tc.constraint_type='UNIQUE'
+  AND tc.constraint_name IN (
+    SELECT tc2.constraint_name
+    FROM information_schema.table_constraints tc2
+    JOIN information_schema.key_column_usage kcu2
+      ON tc2.constraint_name=kcu2.constraint_name AND tc2.table_schema=kcu2.table_schema
+    WHERE tc2.table_schema='public' AND tc2.table_name=$1 AND tc2.constraint_type='UNIQUE'
+    GROUP BY tc2.constraint_name
+    HAVING COUNT(*) = 1
+  )`
 	if err := d.db.Select(&cols, q, table); err != nil {
 		return m, err
 	}

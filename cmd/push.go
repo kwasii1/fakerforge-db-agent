@@ -345,6 +345,8 @@ func streamInsert(client *api.Client, sqldb *sqlx.DB, driver, schemaID, table st
 	succeeded := 0
 	checkedSubset := len(rules) > 0
 	var abortErr error
+	validator := db.NewRowValidator(dbCols)
+	rowIndex := 0
 
 	flush := func() int {
 		if len(batch) == 0 {
@@ -366,6 +368,12 @@ func streamInsert(client *api.Client, sqldb *sqlx.DB, driver, schemaID, table st
 	}
 
 	_, streamErr := client.StreamRows(schemaID, table, func(row map[string]any) bool {
+		if err := validator.ValidateRow(rowIndex, row); err != nil {
+			fmt.Printf("\nvalue rejected — refusing to push:\n%s\n", err)
+			abortErr = err
+			return false
+		}
+		rowIndex++
 		if !checkedSubset {
 			cols := rowKeysAsSchema(row)
 			if ok, diff := db.CheckSubset(cols, dbCols); !ok {
