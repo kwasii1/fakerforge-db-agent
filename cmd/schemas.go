@@ -26,6 +26,12 @@ func RunSchemasList(args []string) int {
 	if *noColor {
 		ui.SetNoColor(true)
 	}
+	if *format != "json" {
+		if b := ui.Brand(); b != "" {
+			fmt.Println(b)
+			fmt.Println()
+		}
+	}
 	client, err := newClient(*apiKey, *apiURL)
 	if err != nil {
 		fmt.Println(err)
@@ -55,6 +61,7 @@ func RunSchemasList(args []string) int {
 		for _, s := range items {
 			rows = append(rows, []string{s.ID, s.Name, strconv.Itoa(s.Tables), s.Created})
 		}
+		fmt.Println(ui.Section("Schemas"))
 		fmt.Println(ui.Table([]string{"SCHEMA ID", "NAME", "TABLES", "CREATED"}, rows))
 		return 0
 	}
@@ -87,6 +94,10 @@ func RunSchemasShow(args []string) int {
 	if *showNoColor {
 		ui.SetNoColor(true)
 	}
+	if b := ui.Brand(); b != "" {
+		fmt.Println(b)
+		fmt.Println()
+	}
 	if *table == "" {
 		*table = tableVal
 	}
@@ -116,16 +127,20 @@ func RunSchemasShow(args []string) int {
 		return 1
 	}
 	if ui.Enabled() {
-		fmt.Printf("%s  %s\n", ui.Bold("Schema:"), d.ID)
-		fmt.Printf("%s    %s\n", ui.Bold("Name:"), d.Name)
-		if d.Created != "" {
-			fmt.Printf("%s %s\n", ui.Bold("Created:"), ui.Muted(d.Created))
+		pairs := [][2]string{
+			{"Schema", ui.Bold(d.ID)},
+			{"Name", d.Name},
 		}
+		if d.Created != "" {
+			pairs = append(pairs, [2]string{"Created", ui.Muted(d.Created)})
+		}
+		fmt.Println(ui.Panel("", ui.KV(pairs)))
 		if len(d.Tables) == 0 {
-			fmt.Println(ui.Muted("Tables:  (none)"))
+			fmt.Println(ui.Muted("No tables."))
 			return 0
 		}
-		fmt.Println(ui.Title("Tables:"))
+		fmt.Println()
+		fmt.Println(ui.Section("Tables"))
 		rows := make([][]string, 0, len(d.Tables))
 		for _, t := range d.Tables {
 			rows = append(rows, []string{t.Table, strconv.Itoa(t.Rows), ui.StatusPill(t.Status)})
@@ -158,20 +173,26 @@ func showTable(client *api.Client, id, table string) int {
 		return 1
 	}
 	if ui.Enabled() {
-		fmt.Printf("%s  %s %s\n", ui.Bold("Schema:"), d.ID, ui.Muted("("+d.Name+")"))
-		fmt.Printf("%s   %s\n", ui.Bold("Table:"), ui.Bold(d.Table))
-		fmt.Printf("%s    %d\n", ui.Bold("Rows:"), d.Rows)
-		fmt.Printf("%s  %s\n", ui.Bold("Status:"), ui.StatusPill(d.Status))
-		if d.Created != "" {
-			fmt.Printf("%s %s\n", ui.Bold("Created:"), ui.Muted(d.Created))
+		pairs := [][2]string{
+			{"Schema", ui.Bold(d.ID) + " " + ui.Muted("("+d.Name+")")},
+			{"Table", ui.Bold(d.Table)},
+			{"Rows", fmt.Sprintf("%d", d.Rows)},
+			{"Status", ui.StatusPill(d.Status)},
 		}
+		if d.Created != "" {
+			pairs = append(pairs, [2]string{"Created", ui.Muted(d.Created)})
+		}
+		fmt.Println(ui.Panel("", ui.KV(pairs)))
 		if d.Rules != nil {
 			if b, err := json.Marshal(d.Rules); err == nil {
-				fmt.Printf("%s   %s\n", ui.Bold("Rules:"), ui.Muted(string(b)))
+				fmt.Println()
+				fmt.Println(ui.Section("Rules"))
+				fmt.Println(ui.Muted(string(b)))
 			}
 		}
 		if len(d.Sample) > 0 {
-			fmt.Println(ui.Title("Sample (first rows):"))
+			fmt.Println()
+			fmt.Println(ui.Section("Sample (first rows)"))
 			n := len(d.Sample)
 			if n > 5 {
 				n = 5

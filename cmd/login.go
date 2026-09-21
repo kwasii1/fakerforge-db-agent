@@ -22,6 +22,10 @@ func RunLogin(args []string) int {
 	if *noColor {
 		ui.SetNoColor(true)
 	}
+	if b := ui.Banner(); b != "" {
+		fmt.Print(b)
+		fmt.Println()
+	}
 	key := *apiKey
 	if key == "" {
 		if v := os.Getenv("FAKERFORGE_API_KEY"); v != "" {
@@ -54,7 +58,12 @@ func RunLogin(args []string) int {
 		return 1
 	}
 	if ui.Enabled() {
-		fmt.Printf("%s Logged in as %s\n", ui.Success("✓"), ui.Bold(u.Email))
+		body := ui.KV([][2]string{
+			{"Email", ui.Bold(u.Email)},
+			{"Plan", ui.StatusPill(u.Plan)},
+			{"API", ui.Muted(c.BaseURL)},
+		})
+		fmt.Println(ui.Panel(ui.Success("✓ Logged in"), body))
 	} else {
 		fmt.Printf("✓ Logged in as %s\n", u.Email)
 	}
@@ -63,11 +72,19 @@ func RunLogin(args []string) int {
 
 // RunLogout implements: fakerforge logout
 func RunLogout(args []string) int {
+	if b := ui.Banner(); b != "" {
+		fmt.Print(b)
+		fmt.Println()
+	}
 	if err := config.DeleteAPIKey(); err != nil {
 		fmt.Printf("logout: %v\n", err)
 		return 1
 	}
-	fmt.Println("Logged out: API key deleted.")
+	if ui.Enabled() {
+		fmt.Printf("%s Logged out — API key deleted.\n", ui.Success("✓"))
+	} else {
+		fmt.Println("Logged out: API key deleted.")
+	}
 	return 0
 }
 
@@ -82,6 +99,10 @@ func RunWhoami(args []string) int {
 	if *noColor {
 		ui.SetNoColor(true)
 	}
+	if b := ui.Banner(); b != "" {
+		fmt.Print(b)
+		fmt.Println()
+	}
 	c, err := newClient("", *apiURL)
 	if err != nil {
 		fmt.Println(err)
@@ -93,12 +114,15 @@ func RunWhoami(args []string) int {
 		return 1
 	}
 	if ui.Enabled() {
-		fmt.Printf("%s  %s\n", ui.Bold("Name:"), u.Name)
-		fmt.Printf("%s %s\n", ui.Bold("Email:"), ui.Success(u.Email))
-		if u.Plan != "" {
-			fmt.Printf("%s  %s\n", ui.Bold("Plan:"), ui.StatusPill(u.Plan))
+		pairs := [][2]string{
+			{"Name", ui.Bold(u.Name)},
+			{"Email", ui.Success(u.Email)},
 		}
-		fmt.Printf("%s    %s\n", ui.Bold("API:"), ui.Muted(c.BaseURL))
+		if u.Plan != "" {
+			pairs = append(pairs, [2]string{"Plan", ui.StatusPill(u.Plan)})
+		}
+		pairs = append(pairs, [2]string{"API", ui.Muted(c.BaseURL)})
+		fmt.Println(ui.Panel("", ui.KV(pairs)))
 		return 0
 	}
 	fmt.Printf("Name:  %s\nEmail: %s\n", u.Name, u.Email)

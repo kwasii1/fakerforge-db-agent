@@ -47,6 +47,10 @@ func RunSchemaPull(args []string) int {
 	if *noColor {
 		ui.SetNoColor(true)
 	}
+	if b := ui.Brand(); b != "" {
+		fmt.Println(b)
+		fmt.Println()
+	}
 	if *table != "" && *tablesFlag != "" {
 		fmt.Println("schema pull: --table and --tables are mutually exclusive")
 		return 2
@@ -105,6 +109,11 @@ func RunSchemaPull(args []string) int {
 	}
 
 	parsed := make(map[string]api.ParsedTable, len(selected))
+	if ui.Enabled() {
+		fmt.Println(ui.Section(fmt.Sprintf("Introspecting %s", conn.Database)))
+		fmt.Println(ui.Muted("Transmitting schema shape only — never row data."))
+		fmt.Println()
+	}
 	for _, t := range selected {
 		cols, err := d.Introspect(t)
 		if err != nil {
@@ -138,12 +147,14 @@ func RunSchemaPull(args []string) int {
 		reusedNote = " (reused existing schema)"
 	}
 	if ui.Enabled() {
-		fmt.Printf("%s Schema uploaded: %s %s\n", ui.Success("✓"),
-			ui.Bold("schema_id="+resp.SchemaID),
-			ui.Muted(fmt.Sprintf("(%d tables)%s", len(selected), reusedNote)))
-		if resp.DashboardURL != "" {
-			fmt.Printf("Dashboard: %s\n", ui.Muted(resp.DashboardURL))
+		pairs := [][2]string{
+			{"Schema", ui.Bold(resp.SchemaID)},
+			{"Tables", fmt.Sprintf("%d%s", len(selected), reusedNote)},
 		}
+		if resp.DashboardURL != "" {
+			pairs = append(pairs, [2]string{"Dashboard", ui.Muted(resp.DashboardURL)})
+		}
+		fmt.Println(ui.Panel(ui.Success("✓ Schema uploaded"), ui.KV(pairs)))
 	} else {
 		fmt.Printf("✓ Schema uploaded: schema_id=%s (%d tables)%s\n", resp.SchemaID, len(selected), reusedNote)
 		if resp.DashboardURL != "" {
@@ -156,7 +167,11 @@ func RunSchemaPull(args []string) int {
 		return 0
 	}
 	if *async {
-		fmt.Printf("Generation not started. Run: fakerforge schemas show %s\n", resp.SchemaID)
+		if ui.Enabled() {
+			fmt.Println(ui.Muted(fmt.Sprintf("Generation not started. Run: fakerforge schemas show %s", resp.SchemaID)))
+		} else {
+			fmt.Printf("Generation not started. Run: fakerforge schemas show %s\n", resp.SchemaID)
+		}
 		return 0
 	}
 
@@ -165,15 +180,22 @@ func RunSchemaPull(args []string) int {
 		return 1
 	}
 
+	if ui.Enabled() {
+		fmt.Println()
+		fmt.Println(ui.Section("Generating data"))
+	}
 	final, err := pollProgress(client, resp.SchemaID, *interval, *timeout, os.Stdout, *noProgress)
 	if err != nil {
 		fmt.Printf("\n%s\n", err)
 		return 1
 	}
 	if ui.Enabled() {
-		fmt.Printf("\n%s Ready: %s %s\n", ui.Success("✓"),
-			ui.Bold(final.SchemaID), ui.Muted(fmt.Sprintf("(%d tables)", len(final.Generation.Tables))))
-		fmt.Printf("Next: %s\n", ui.Muted(fmt.Sprintf("fakerforge push --schema %s --connection %s --table TABLE", final.SchemaID, conn.Name)))
+		body := ui.KV([][2]string{
+			{"Schema", ui.Bold(final.SchemaID)},
+			{"Tables", fmt.Sprintf("%d", len(final.Generation.Tables))},
+			{"Next", ui.Muted(fmt.Sprintf("fakerforge push --schema %s --connection %s --table TABLE", final.SchemaID, conn.Name))},
+		})
+		fmt.Println(ui.Panel(ui.Success("✓ Ready"), body))
 	} else {
 		fmt.Printf("\n✓ Ready: %s (%d tables)\n", final.SchemaID, len(final.Generation.Tables))
 		fmt.Printf("Next: fakerforge push --schema %s --connection %s --table TABLE\n", final.SchemaID, conn.Name)
@@ -232,8 +254,8 @@ func selectTables(all []string, single, multi string) ([]string, error) {
 func printColumns(table string, cols []db.Column) {
 	// Security transparency: show exactly what leaves the machine.
 	if ui.Enabled() {
-		fmt.Printf("%s %s\n", ui.Title("Transmitting schema shape only (no row data) for"),
-			ui.Bold(table)+ui.Title(":"))
+		fmt.Printf("%s %s\n", ui.Title("▸ "+table),
+			ui.Muted(fmt.Sprintf("(%d columns)", len(cols))))
 		for _, c := range cols {
 			null := "NOT NULL"
 			if c.Nullable {
@@ -249,7 +271,7 @@ func printColumns(table string, cols []db.Column) {
 			if c.FKRef != "" {
 				extra += " FK->" + c.FKRef
 			}
-			fmt.Printf("  %s %s\n", ui.Muted("-"),
+			fmt.Printf("  %s %s\n", ui.Muted("│"),
 				ui.Muted(fmt.Sprintf("%s %s %s%s", c.Name, parse.DisplayType(c), null, extra)))
 		}
 		return

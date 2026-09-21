@@ -25,7 +25,8 @@ func RunStatus(args []string) int {
 	}
 	styled := ui.Enabled()
 	if styled {
-		fmt.Println(ui.Title("fakerforge status"))
+		fmt.Print(ui.Banner())
+		fmt.Println()
 	}
 	failed := false
 
@@ -163,16 +164,15 @@ func printStatusConnsHeader(styled bool, ok bool, detail string) {
 	}
 	if !ok {
 		fmt.Printf("%s %s  %s %s\n", ui.Dot(false),
-			ui.Bold("connections"), ui.Error("FAIL"), ui.Muted("("+detail+")"))
+			ui.Section("Connections"), ui.Error("FAIL"), ui.Muted("("+detail+")"))
 		return
 	}
 	if detail == "none saved" {
-		fmt.Printf("%s %s  %s\n", ui.Dot(true),
-			ui.Bold("connections"), ui.Muted("none saved — run `fakerforge connect`"))
+		fmt.Printf("%s  %s\n", ui.Section("Connections"),
+			ui.Muted("none saved — run `fakerforge connect`"))
 		return
 	}
-	fmt.Printf("%s %s  %s\n", ui.Dot(true),
-		ui.Bold("connections"), ui.Muted("("+detail+")"))
+	fmt.Printf("%s  %s\n", ui.Section("Connections"), ui.Muted("("+detail+")"))
 }
 
 func printStatusConn(styled bool, name string, ok bool, detail string, isDefault bool) {

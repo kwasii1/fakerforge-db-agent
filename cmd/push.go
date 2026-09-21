@@ -54,6 +54,10 @@ func RunPush(args []string) int {
 		fmt.Println("--batch-size must be 1-5000")
 		return 2
 	}
+	if b := ui.Brand(); b != "" {
+		fmt.Println(b)
+		fmt.Println()
+	}
 
 	client, err := newClient(*apiKey, *apiURL)
 	if err != nil {
@@ -154,8 +158,11 @@ func pushSingleTable(client *api.Client, d db.Driver, conn config.Connection, sc
 		return 1
 	}
 	if ui.Enabled() {
-		fmt.Printf("\n%s Pushed %s rows into %s.%s\n",
-			ui.Success("✓"), ui.Bold(fmt.Sprintf("%d", n)), conn.Database, ui.Bold(table))
+		body := ui.KV([][2]string{
+			{"Rows", ui.Bold(fmt.Sprintf("%d", n))},
+			{"Table", ui.Bold(conn.Database + "." + table)},
+		})
+		fmt.Println(ui.Panel(ui.Success("✓ Pushed"), body))
 	} else {
 		fmt.Printf("\n✓ Pushed %d rows into %s.%s\n", n, conn.Database, table)
 	}
@@ -246,9 +253,9 @@ func pushAllTables(client *api.Client, d db.Driver, conn config.Connection, sche
 		verb = "INSERT"
 	}
 	if ui.Enabled() {
-		fmt.Printf("%s %s table(s) in %s:\n", ui.Bold(verb), ui.Bold(fmt.Sprintf("%d", len(ordered))), ui.Bold(conn.Database))
+		fmt.Println(ui.Section(fmt.Sprintf("%s — %d table(s) in %s", verb, len(ordered), conn.Database)))
 		for _, t := range ordered {
-			fmt.Printf("  %s %s %s\n", ui.Muted("-"), ui.Bold(t),
+			fmt.Printf("  %s %s %s\n", ui.Title("•"), ui.Bold(t),
 				ui.Muted(fmt.Sprintf("(%d rows)", byName[t].rows)))
 		}
 	} else {
@@ -296,9 +303,12 @@ func pushAllTables(client *api.Client, d db.Driver, conn config.Connection, sche
 		}
 	}
 	if ui.Enabled() {
-		fmt.Printf("%s Pushed %s rows into %s table(s) in %s\n",
-			ui.Success("✓"), ui.Bold(fmt.Sprintf("%d", total)),
-			ui.Bold(fmt.Sprintf("%d", len(ordered))), ui.Bold(conn.Database))
+		body := ui.KV([][2]string{
+			{"Rows", ui.Bold(fmt.Sprintf("%d", total))},
+			{"Tables", ui.Bold(fmt.Sprintf("%d", len(ordered)))},
+			{"Database", ui.Bold(conn.Database)},
+		})
+		fmt.Println(ui.Panel(ui.Success("✓ Pushed"), body))
 	} else {
 		fmt.Printf("✓ Pushed %d rows into %d table(s) in %s\n", total, len(ordered), conn.Database)
 	}

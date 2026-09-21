@@ -17,11 +17,12 @@ import (
 )
 
 // RunConnect implements:
-//   fakerforge connect                                 # interactive prompts
-//   fakerforge connect --name N --driver postgres|mysql --host H --port P --database D --user U [--password P]
-//   fakerforge connect --list
-//   fakerforge connect --remove NAME
-//   fakerforge connect --default NAME
+//
+//	fakerforge connect                                 # interactive prompts
+//	fakerforge connect --name N --driver postgres|mysql --host H --port P --database D --user U [--password P]
+//	fakerforge connect --list
+//	fakerforge connect --remove NAME
+//	fakerforge connect --default NAME
 //
 // Any of --name/--database/--user omitted on a terminal prompts
 // interactively; on a non-terminal stdin the command fails fast.
@@ -43,6 +44,10 @@ func RunConnect(args []string) int {
 	}
 	if *noColor {
 		ui.SetNoColor(true)
+	}
+	if b := ui.Banner(); b != "" {
+		fmt.Print(b)
+		fmt.Println()
 	}
 
 	store, err := config.Default()
@@ -158,8 +163,13 @@ func RunConnect(args []string) int {
 		return 1
 	}
 	if ui.Enabled() {
-		fmt.Printf("%s Connected to %s %s\n", ui.Success("✓"),
-			ui.Bold(conn.Name), ui.Muted(fmt.Sprintf("(%s:%d/%s) as %s", conn.Host, conn.Port, conn.Database, conn.User)))
+		body := ui.KV([][2]string{
+			{"Host", ui.Bold(fmt.Sprintf("%s:%d", conn.Host, conn.Port))},
+			{"Database", ui.Bold(conn.Database)},
+			{"User", conn.User},
+			{"Driver", ui.Muted(conn.Driver)},
+		})
+		fmt.Println(ui.Panel(ui.Success("✓ Connected")+" "+ui.Muted(conn.Name), body))
 	} else {
 		fmt.Printf("✓ Connected to %s (%s:%d/%s) as %s\n", conn.Name, conn.Host, conn.Port, conn.Database, conn.User)
 	}
@@ -194,6 +204,7 @@ func listConnections(store *config.Store) int {
 				strconv.Itoa(c.Port), c.Database, c.User, mark,
 			})
 		}
+		fmt.Println(ui.Section("Connections"))
 		fmt.Println(ui.Table([]string{"NAME", "DRIVER", "HOST", "PORT", "DATABASE", "USER", "DEFAULT"}, rows))
 		return 0
 	}
