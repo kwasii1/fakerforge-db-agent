@@ -1,0 +1,60 @@
+# GoReleaser v2 config. Releases cut on `v*` tags via .github/workflows/release.yml.
+# The git tag is stamped into the binary (internal/api.Version); dev builds
+# fall back to the constant in internal/api/client.go.
+version: 2
+
+project_name: fakerforge
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: fakerforge
+    main: .
+    binary: fakerforge
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X github.com/kwasii1/fakerforge-db-agent/internal/api.Version={{.Version}}
+
+archives:
+  - id: default
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  use: github
+
+# Publishes/updates Formula/fakerforge.rb in the tap repo on every release.
+# Requires a HOMEBREW_TAP_TOKEN secret (classic PAT with repo scope for
+# kwasii1/homebrew-fakerforge); release fails otherwise, so keep the token fresh.
+# NOTE: `brews` is flagged deprecated by newer GoReleaser nightlies in favor
+# of `homebrews`, but stable v2 (what release.yml pins) still uses `brews` —
+# keep this key until the pinned action accepts `homebrews`.
+brews:
+  - name: fakerforge
+    repository:
+      owner: kwasii1
+      name: homebrew-fakerforge
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://fakerforge.com/docs/fakerforge-cli
+    description: Pull FakerForge synthetic data directly into your local database

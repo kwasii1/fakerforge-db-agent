@@ -13,10 +13,14 @@ import (
 )
 
 // Version is the CLI version, checked against GET /api/cli/latest.
-const Version = "0.1.0"
+// Release builds override it via ldflags (see .goreleaser.yml); the
+// constant below is the dev-build fallback.
+var Version = "0.1.0"
 
 // DefaultBaseURL is used when FAKERFORGE_API_URL is unset.
-const DefaultBaseURL = "http://127.0.0.1:8001"
+// Production is the default; maintainers working locally override it via
+// FAKERFORGE_API_URL=http://127.0.0.1:8001.
+const DefaultBaseURL = "https://fakerforge.com"
 
 // Client talks to the FakerForge Laravel API.
 // Auth: Authorization: Bearer {api_key} on every request.

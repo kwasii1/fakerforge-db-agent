@@ -11,7 +11,7 @@ import (
 	"golang.org/x/term"
 )
 
-// apiURLFromEnv returns FAKERFORGE_API_URL or the localhost default.
+// apiURLFromEnv returns FAKERFORGE_API_URL or the production default.
 func apiURLFromEnv() string {
 	if v := os.Getenv("FAKERFORGE_API_URL"); v != "" {
 		return v
