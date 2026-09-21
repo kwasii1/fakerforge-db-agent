@@ -128,21 +128,6 @@ Environment:
 - Target host looks like production (`prod`/`production` in the hostname): `push` demands an extra confirmation.
 - `status` exits non-zero: read the per-connection report — it tells you whether auth, a connection, or the CLI version is the problem.
 
-## Backend contract (Laravel)
-
-The CLI expects (served by `dbseeder`):
-
-```
-GET  /api/me
-POST /api/schemas
-GET  /api/schemas?status=&table=
-GET  /api/schemas/{id}?table=
-GET  /api/schemas/{id}/{table}/stream   (JSONL, chunked)
-GET  /api/cli/latest
-```
-
-All with `Authorization: Bearer {api_key}`.
-
 ## License
 
 MIT — see [LICENSE](LICENSE).
