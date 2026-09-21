@@ -12,6 +12,7 @@ import (
 	"github.com/kwasii1/fakerforge-db-agent/internal/config"
 	"github.com/kwasii1/fakerforge-db-agent/internal/db"
 	"github.com/kwasii1/fakerforge-db-agent/internal/parse"
+	"github.com/kwasii1/fakerforge-db-agent/internal/ui"
 	"golang.org/x/term"
 )
 
@@ -39,8 +40,12 @@ func RunSchemaPull(args []string) int {
 	noProgress := fs.Bool("no-progress", false, "Suppress live progress, print only the final result")
 	apiURL := fs.String("api-url", "", "API base URL")
 	apiKey := fs.String("api-key", "", "API key override")
+	noColor := fs.Bool("no-color", false, "Disable colored output")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if *noColor {
+		ui.SetNoColor(true)
 	}
 	if *table != "" && *tablesFlag != "" {
 		fmt.Println("schema pull: --table and --tables are mutually exclusive")
@@ -132,9 +137,18 @@ func RunSchemaPull(args []string) int {
 	if resp.Reused {
 		reusedNote = " (reused existing schema)"
 	}
-	fmt.Printf("✓ Schema uploaded: schema_id=%s (%d tables)%s\n", resp.SchemaID, len(selected), reusedNote)
-	if resp.DashboardURL != "" {
-		fmt.Printf("Dashboard: %s\n", resp.DashboardURL)
+	if ui.Enabled() {
+		fmt.Printf("%s Schema uploaded: %s %s\n", ui.Success("✓"),
+			ui.Bold("schema_id="+resp.SchemaID),
+			ui.Muted(fmt.Sprintf("(%d tables)%s", len(selected), reusedNote)))
+		if resp.DashboardURL != "" {
+			fmt.Printf("Dashboard: %s\n", ui.Muted(resp.DashboardURL))
+		}
+	} else {
+		fmt.Printf("✓ Schema uploaded: schema_id=%s (%d tables)%s\n", resp.SchemaID, len(selected), reusedNote)
+		if resp.DashboardURL != "" {
+			fmt.Printf("Dashboard: %s\n", resp.DashboardURL)
+		}
 	}
 
 	if resp.Reused && !*regenerate {
@@ -156,8 +170,14 @@ func RunSchemaPull(args []string) int {
 		fmt.Printf("\n%s\n", err)
 		return 1
 	}
-	fmt.Printf("\n✓ Ready: %s (%d tables)\n", final.SchemaID, len(final.Generation.Tables))
-	fmt.Printf("Next: fakerforge push --schema %s --connection %s --table TABLE\n", final.SchemaID, conn.Name)
+	if ui.Enabled() {
+		fmt.Printf("\n%s Ready: %s %s\n", ui.Success("✓"),
+			ui.Bold(final.SchemaID), ui.Muted(fmt.Sprintf("(%d tables)", len(final.Generation.Tables))))
+		fmt.Printf("Next: %s\n", ui.Muted(fmt.Sprintf("fakerforge push --schema %s --connection %s --table TABLE", final.SchemaID, conn.Name)))
+	} else {
+		fmt.Printf("\n✓ Ready: %s (%d tables)\n", final.SchemaID, len(final.Generation.Tables))
+		fmt.Printf("Next: fakerforge push --schema %s --connection %s --table TABLE\n", final.SchemaID, conn.Name)
+	}
 	return 0
 }
 
@@ -211,6 +231,29 @@ func selectTables(all []string, single, multi string) ([]string, error) {
 
 func printColumns(table string, cols []db.Column) {
 	// Security transparency: show exactly what leaves the machine.
+	if ui.Enabled() {
+		fmt.Printf("%s %s\n", ui.Title("Transmitting schema shape only (no row data) for"),
+			ui.Bold(table)+ui.Title(":"))
+		for _, c := range cols {
+			null := "NOT NULL"
+			if c.Nullable {
+				null = "NULL"
+			}
+			extra := ""
+			if c.IsPK {
+				extra += " PK"
+			}
+			if c.Unique {
+				extra += " UNIQUE"
+			}
+			if c.FKRef != "" {
+				extra += " FK->" + c.FKRef
+			}
+			fmt.Printf("  %s %s\n", ui.Muted("-"),
+				ui.Muted(fmt.Sprintf("%s %s %s%s", c.Name, parse.DisplayType(c), null, extra)))
+		}
+		return
+	}
 	fmt.Printf("Transmitting schema shape only (no row data) for %s:\n", table)
 	for _, c := range cols {
 		null := "NOT NULL"
@@ -326,35 +369,14 @@ func isTTYWriter(out io.Writer) bool {
 
 // renderBar returns e.g. "[######--------------]" for gen/req.
 // req <= 0 yields an indeterminate empty bar; gen is clamped to [0, req].
+// Delegates to the shared Lip Gloss theme so TTY output is colorized
+// while piped output stays plain ASCII.
 func renderBar(gen, req, width int) string {
-	if width < 5 {
-		width = 5
-	}
-	if req <= 0 {
-		return "[" + strings.Repeat("-", width) + "]"
-	}
-	if gen < 0 {
-		gen = 0
-	}
-	if gen > req {
-		gen = req
-	}
-	filled := gen * width / req
-	return "[" + strings.Repeat("#", filled) + strings.Repeat("-", width-filled) + "]"
+	return ui.ProgressBar(gen, req, width)
 }
 
 func barPercent(gen, req int) string {
-	if req <= 0 {
-		return "--%"
-	}
-	if gen < 0 {
-		gen = 0
-	}
-	pct := gen * 100 / req
-	if pct > 100 {
-		pct = 100
-	}
-	return fmt.Sprintf("%3d%%", pct)
+	return ui.Percent(gen, req)
 }
 
 func pullTotals(p api.SchemaProgress) (gen, req int) {

@@ -13,6 +13,7 @@ import (
 	"github.com/kwasii1/fakerforge-db-agent/internal/config"
 	"github.com/kwasii1/fakerforge-db-agent/internal/db"
 	"github.com/kwasii1/fakerforge-db-agent/internal/insert"
+	"github.com/kwasii1/fakerforge-db-agent/internal/ui"
 )
 
 // RunPush implements:
@@ -34,8 +35,12 @@ func RunPush(args []string) int {
 	append := fs.Bool("append", false, "Insert without truncating first (all-tables mode)")
 	apiURL := fs.String("api-url", "", "API base URL")
 	apiKey := fs.String("api-key", "", "API key override")
+	noColor := fs.Bool("no-color", false, "Disable colored output")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if *noColor {
+		ui.SetNoColor(true)
 	}
 	if *schemaID == "" {
 		fmt.Println("push requires --schema ID")
@@ -148,7 +153,12 @@ func pushSingleTable(client *api.Client, d db.Driver, conn config.Connection, sc
 		fmt.Printf("\n%s\n", err)
 		return 1
 	}
-	fmt.Printf("\n✓ Pushed %d rows into %s.%s\n", n, conn.Database, table)
+	if ui.Enabled() {
+		fmt.Printf("\n%s Pushed %s rows into %s.%s\n",
+			ui.Success("✓"), ui.Bold(fmt.Sprintf("%d", n)), conn.Database, ui.Bold(table))
+	} else {
+		fmt.Printf("\n✓ Pushed %d rows into %s.%s\n", n, conn.Database, table)
+	}
 	return 0
 }
 
@@ -235,13 +245,25 @@ func pushAllTables(client *api.Client, d db.Driver, conn config.Connection, sche
 	if appendMode {
 		verb = "INSERT"
 	}
-	fmt.Printf("%s %d table(s) in %s:\n", verb, len(ordered), conn.Database)
-	for _, t := range ordered {
-		fmt.Printf("  - %s (%d rows)\n", t, byName[t].rows)
+	if ui.Enabled() {
+		fmt.Printf("%s %s table(s) in %s:\n", ui.Bold(verb), ui.Bold(fmt.Sprintf("%d", len(ordered))), ui.Bold(conn.Database))
+		for _, t := range ordered {
+			fmt.Printf("  %s %s %s\n", ui.Muted("-"), ui.Bold(t),
+				ui.Muted(fmt.Sprintf("(%d rows)", byName[t].rows)))
+		}
+	} else {
+		fmt.Printf("%s %d table(s) in %s:\n", verb, len(ordered), conn.Database)
+		for _, t := range ordered {
+			fmt.Printf("  - %s (%d rows)\n", t, byName[t].rows)
+		}
 	}
 
 	if dryRun {
-		fmt.Println("(no writes performed)")
+		if ui.Enabled() {
+			fmt.Println(ui.Muted("(no writes performed)"))
+		} else {
+			fmt.Println("(no writes performed)")
+		}
 		return 0
 	}
 	if !appendMode {
@@ -267,9 +289,19 @@ func pushAllTables(client *api.Client, d db.Driver, conn config.Connection, sche
 			return 1
 		}
 		total += n
-		fmt.Printf("\n✓ %s: %d rows\n", t, n)
+		if ui.Enabled() {
+			fmt.Printf("\n%s %s: %s rows\n", ui.Success("✓"), ui.Bold(t), ui.Bold(fmt.Sprintf("%d", n)))
+		} else {
+			fmt.Printf("\n✓ %s: %d rows\n", t, n)
+		}
 	}
-	fmt.Printf("✓ Pushed %d rows into %d table(s) in %s\n", total, len(ordered), conn.Database)
+	if ui.Enabled() {
+		fmt.Printf("%s Pushed %s rows into %s table(s) in %s\n",
+			ui.Success("✓"), ui.Bold(fmt.Sprintf("%d", total)),
+			ui.Bold(fmt.Sprintf("%d", len(ordered))), ui.Bold(conn.Database))
+	} else {
+		fmt.Printf("✓ Pushed %d rows into %d table(s) in %s\n", total, len(ordered), conn.Database)
+	}
 	return 0
 }
 
@@ -314,7 +346,11 @@ func streamInsert(client *api.Client, sqldb *sqlx.DB, driver, schemaID, table st
 			return -1
 		}
 		succeeded += n
-		fmt.Fprintf(os.Stderr, "\r%d rows inserted", succeeded)
+		if ui.Enabled() {
+			fmt.Fprintf(os.Stderr, "\r%s rows inserted", ui.Bold(fmt.Sprintf("%d", succeeded)))
+		} else {
+			fmt.Fprintf(os.Stderr, "\r%d rows inserted", succeeded)
+		}
 		batch = batch[:0]
 		return n
 	}

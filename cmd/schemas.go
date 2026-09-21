@@ -5,9 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"text/tabwriter"
 
 	"github.com/kwasii1/fakerforge-db-agent/internal/api"
+	"github.com/kwasii1/fakerforge-db-agent/internal/ui"
 )
 
 // RunSchemasList implements: fakerforge schemas list [--table T] [--format table|json]
@@ -17,8 +19,12 @@ func RunSchemasList(args []string) int {
 	format := fs.String("format", "table", "Output: table|json")
 	apiURL := fs.String("api-url", "", "API base URL")
 	apiKey := fs.String("api-key", "", "API key override")
+	noColor := fs.Bool("no-color", false, "Disable colored output")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if *noColor {
+		ui.SetNoColor(true)
 	}
 	client, err := newClient(*apiKey, *apiURL)
 	if err != nil {
@@ -37,7 +43,19 @@ func RunSchemasList(args []string) int {
 		return 0
 	}
 	if len(items) == 0 {
-		fmt.Println("No schemas found.")
+		if ui.Enabled() {
+			fmt.Println(ui.Muted("No schemas found — run `fakerforge schema pull` to create one."))
+		} else {
+			fmt.Println("No schemas found.")
+		}
+		return 0
+	}
+	if ui.Enabled() {
+		rows := make([][]string, 0, len(items))
+		for _, s := range items {
+			rows = append(rows, []string{s.ID, s.Name, strconv.Itoa(s.Tables), s.Created})
+		}
+		fmt.Println(ui.Table([]string{"SCHEMA ID", "NAME", "TABLES", "CREATED"}, rows))
 		return 0
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
@@ -62,8 +80,12 @@ func RunSchemasShow(args []string) int {
 	table := fs.String("table", "", "Show detail for just this table")
 	apiURL := fs.String("api-url", "", "API base URL")
 	apiKey := fs.String("api-key", "", "API key override")
+	showNoColor := fs.Bool("no-color", false, "Disable colored output")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if *showNoColor {
+		ui.SetNoColor(true)
 	}
 	if *table == "" {
 		*table = tableVal
@@ -93,6 +115,24 @@ func RunSchemasShow(args []string) int {
 		fmt.Printf("show failed: %v\n", err)
 		return 1
 	}
+	if ui.Enabled() {
+		fmt.Printf("%s  %s\n", ui.Bold("Schema:"), d.ID)
+		fmt.Printf("%s    %s\n", ui.Bold("Name:"), d.Name)
+		if d.Created != "" {
+			fmt.Printf("%s %s\n", ui.Bold("Created:"), ui.Muted(d.Created))
+		}
+		if len(d.Tables) == 0 {
+			fmt.Println(ui.Muted("Tables:  (none)"))
+			return 0
+		}
+		fmt.Println(ui.Title("Tables:"))
+		rows := make([][]string, 0, len(d.Tables))
+		for _, t := range d.Tables {
+			rows = append(rows, []string{t.Table, strconv.Itoa(t.Rows), ui.StatusPill(t.Status)})
+		}
+		fmt.Println(ui.Table([]string{"TABLE", "ROWS", "STATUS"}, rows))
+		return 0
+	}
 	fmt.Printf("Schema:  %s\nName:    %s\n", d.ID, d.Name)
 	if d.Created != "" {
 		fmt.Printf("Created: %s\n", d.Created)
@@ -116,6 +156,32 @@ func showTable(client *api.Client, id, table string) int {
 	if err != nil {
 		fmt.Printf("show failed: %v\n", err)
 		return 1
+	}
+	if ui.Enabled() {
+		fmt.Printf("%s  %s %s\n", ui.Bold("Schema:"), d.ID, ui.Muted("("+d.Name+")"))
+		fmt.Printf("%s   %s\n", ui.Bold("Table:"), ui.Bold(d.Table))
+		fmt.Printf("%s    %d\n", ui.Bold("Rows:"), d.Rows)
+		fmt.Printf("%s  %s\n", ui.Bold("Status:"), ui.StatusPill(d.Status))
+		if d.Created != "" {
+			fmt.Printf("%s %s\n", ui.Bold("Created:"), ui.Muted(d.Created))
+		}
+		if d.Rules != nil {
+			if b, err := json.Marshal(d.Rules); err == nil {
+				fmt.Printf("%s   %s\n", ui.Bold("Rules:"), ui.Muted(string(b)))
+			}
+		}
+		if len(d.Sample) > 0 {
+			fmt.Println(ui.Title("Sample (first rows):"))
+			n := len(d.Sample)
+			if n > 5 {
+				n = 5
+			}
+			for i := 0; i < n; i++ {
+				b, _ := json.Marshal(d.Sample[i])
+				fmt.Printf("  %s\n", ui.Muted(string(b)))
+			}
+		}
+		return 0
 	}
 	fmt.Printf("Schema:  %s (%s)\nTable:   %s\nRows:    %d\nStatus:  %s\n",
 		d.ID, d.Name, d.Table, d.Rows, d.Status)

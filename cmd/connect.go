@@ -12,6 +12,7 @@ import (
 
 	"github.com/kwasii1/fakerforge-db-agent/internal/config"
 	"github.com/kwasii1/fakerforge-db-agent/internal/db"
+	"github.com/kwasii1/fakerforge-db-agent/internal/ui"
 	"golang.org/x/term"
 )
 
@@ -36,8 +37,12 @@ func RunConnect(args []string) int {
 	list := fs.Bool("list", false, "List saved connections")
 	remove := fs.String("remove", "", "Remove a saved connection")
 	def := fs.String("default", "", "Set default connection")
+	noColor := fs.Bool("no-color", false, "Disable colored output")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if *noColor {
+		ui.SetNoColor(true)
 	}
 
 	store, err := config.Default()
@@ -65,7 +70,11 @@ func RunConnect(args []string) int {
 			fmt.Println(err)
 			return 1
 		}
-		fmt.Printf("Default connection: %s\n", *def)
+		if ui.Enabled() {
+			fmt.Printf("%s Default connection: %s\n", ui.Success("✓"), ui.Bold(*def))
+		} else {
+			fmt.Printf("Default connection: %s\n", *def)
+		}
 		return 0
 	}
 
@@ -78,20 +87,25 @@ func RunConnect(args []string) int {
 			return 2
 		}
 		var err error
-		if conn, err = promptForMissing(*name, *database, *user, *driver, *host, *port); err != nil {
+		if conn, err = promptForMissingHuh(*name, *database, *user, *driver, *host, *port); err != nil {
 			fmt.Printf("connect cancelled: %v\n", err)
 			return 1
 		}
 		// Don't silently clobber a saved entry + keychain password.
 		if _, err := store.Get(conn.Name); err == nil {
-			ans, err := promptLine(fmt.Sprintf("Connection %q already exists. Overwrite? [y/N]", conn.Name))
-			if err != nil || !isYes(ans) {
+			ok, err := confirmOverwriteHuh(conn.Name)
+			if err != nil || !ok {
 				fmt.Println("aborted.")
 				return 1
 			}
 		}
-		fmt.Printf("Will connect to %s (%s:%d/%s) as %s\n",
-			conn.Name, conn.Host, conn.Port, conn.Database, conn.User)
+		if ui.Enabled() {
+			fmt.Printf("Will connect to %s %s\n", ui.Bold(conn.Name),
+				ui.Muted(fmt.Sprintf("(%s:%d/%s) as %s", conn.Host, conn.Port, conn.Database, conn.User)))
+		} else {
+			fmt.Printf("Will connect to %s (%s:%d/%s) as %s\n",
+				conn.Name, conn.Host, conn.Port, conn.Database, conn.User)
+		}
 	} else {
 		if *driver != "postgres" && *driver != "mysql" {
 			fmt.Println("driver must be postgres|mysql")
@@ -115,10 +129,14 @@ func RunConnect(args []string) int {
 			fmt.Println("connect requires --password or FAKERFORGE_DB_PASSWORD when stdin is not a terminal")
 			return 2
 		}
-		v, err := promptPassword("DB password")
+		v, err := promptPasswordHuh()
 		if err != nil || v == "" {
-			fmt.Println("connect cancelled: no password provided")
-			return 1
+			// Fall back to the legacy hidden prompt before giving up.
+			v, err = promptPassword("DB password")
+			if err != nil || v == "" {
+				fmt.Println("connect cancelled: no password provided")
+				return 1
+			}
 		}
 		pw = v
 	}
@@ -139,7 +157,12 @@ func RunConnect(args []string) int {
 		fmt.Printf("connected OK but failed to save password: %v\n", err)
 		return 1
 	}
-	fmt.Printf("✓ Connected to %s (%s:%d/%s) as %s\n", conn.Name, conn.Host, conn.Port, conn.Database, conn.User)
+	if ui.Enabled() {
+		fmt.Printf("%s Connected to %s %s\n", ui.Success("✓"),
+			ui.Bold(conn.Name), ui.Muted(fmt.Sprintf("(%s:%d/%s) as %s", conn.Host, conn.Port, conn.Database, conn.User)))
+	} else {
+		fmt.Printf("✓ Connected to %s (%s:%d/%s) as %s\n", conn.Name, conn.Host, conn.Port, conn.Database, conn.User)
+	}
 	return 0
 }
 
@@ -150,11 +173,30 @@ func listConnections(store *config.Store) int {
 		return 1
 	}
 	if len(conns) == 0 {
-		fmt.Println("No saved connections.")
+		if ui.Enabled() {
+			fmt.Println(ui.Muted("No saved connections — run `fakerforge connect` to add one."))
+		} else {
+			fmt.Println("No saved connections.")
+		}
 		return 0
 	}
 	def, _ := store.GetDefaultName()
 	sort.Slice(conns, func(i, j int) bool { return conns[i].Name < conns[j].Name })
+	if ui.Enabled() {
+		rows := make([][]string, 0, len(conns))
+		for _, c := range conns {
+			mark := ""
+			if c.Name == def {
+				mark = ui.Success("*")
+			}
+			rows = append(rows, []string{
+				c.Name, c.Driver, c.Host,
+				strconv.Itoa(c.Port), c.Database, c.User, mark,
+			})
+		}
+		fmt.Println(ui.Table([]string{"NAME", "DRIVER", "HOST", "PORT", "DATABASE", "USER", "DEFAULT"}, rows))
+		return 0
+	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tDRIVER\tHOST\tPORT\tDATABASE\tUSER\tDEFAULT")
 	for _, c := range conns {
