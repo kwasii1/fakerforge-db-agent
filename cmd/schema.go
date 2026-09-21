@@ -350,9 +350,6 @@ func pollProgress(client *api.Client, schemaID string, interval, timeout time.Du
 // barWidth is the fixed width of every ASCII progress bar.
 const barWidth = 20
 
-// maxDetailTables caps per-table lines so wide schemas don't flood the terminal.
-const maxDetailTables = 10
-
 var spinnerFrames = []string{"|", "/", "-", "\\"}
 
 func spinnerFrame(i int) string {
@@ -387,8 +384,32 @@ func pullTotals(p api.SchemaProgress) (gen, req int) {
 	return gen, req
 }
 
-// renderPullLines builds the TTY block: one overall line plus one line per
-// table (capped). Indeterminate stages keep a spinner instead of a bar.
+// overallPercent prefers the server-reported percentage and falls back to
+// the generated/requested totals for older servers that don't send it.
+func overallPercent(p api.SchemaProgress) int {
+	if p.Percentage > 0 || p.Overall == "ready" {
+		pct := p.Percentage
+		if pct > 100 {
+			pct = 100
+		}
+		if pct < 0 {
+			pct = 0
+		}
+		return pct
+	}
+	gen, req := pullTotals(p)
+	if req <= 0 {
+		return 0
+	}
+	pct := gen * 100 / req
+	if pct > 100 {
+		pct = 100
+	}
+	return pct
+}
+
+// renderPullLines builds the single-line live block: one overall bar with the
+// current phase. Indeterminate stages keep a spinner instead of a bar.
 func renderPullLines(p api.SchemaProgress, spin string) []string {
 	switch p.Overall {
 	case "failed":
@@ -396,67 +417,33 @@ func renderPullLines(p api.SchemaProgress, spin string) []string {
 	case "relationships":
 		return []string{fmt.Sprintf("%s relationships (%d found)…", spin, p.Relationships.Count)}
 	case "generating", "ready":
-		gen, req := pullTotals(p)
-		// No per-table detail yet (e.g. queued but not started): fall back
-		// to a single overall line instead of an empty block.
-		if len(p.Generation.Tables) == 0 {
-			if p.Overall == "ready" {
-				return []string{"ready"}
-			}
-			return []string{fmt.Sprintf("%s generating %s %s (%d/%d)", spin, renderBar(gen, req, barWidth), barPercent(gen, req), gen, req)}
-		}
-		head := fmt.Sprintf("%s generating %s %s (%d/%d)", spin, renderBar(gen, req, barWidth), barPercent(gen, req), gen, req)
+		pct := overallPercent(p)
 		if p.Overall == "ready" {
-			head = fmt.Sprintf("ready %s %s (%d/%d)", renderBar(gen, req, barWidth), barPercent(gen, req), gen, req)
+			pct = 100
 		}
-		lines := []string{head}
-		shown := p.Generation.Tables
-		extra := 0
-		if len(shown) > maxDetailTables {
-			extra = len(shown) - maxDetailTables
-			shown = shown[:maxDetailTables]
+		bar := renderBar(pct, 100, barWidth)
+		if p.Overall == "ready" {
+			return []string{fmt.Sprintf("ready %s %s", bar, barPercent(pct, 100))}
 		}
-		for _, t := range shown {
-			lines = append(lines, fmt.Sprintf("  %s %s %s (%d/%d)", t.Table, renderBar(t.Generated, t.Requested, barWidth), barPercent(t.Generated, t.Requested), t.Generated, t.Requested))
-		}
-		if extra > 0 {
-			lines = append(lines, fmt.Sprintf("  … +%d more", extra))
-		}
-		return lines
+		return []string{fmt.Sprintf("%s generating %s %s", spin, bar, barPercent(pct, 100))}
 	default:
 		return []string{fmt.Sprintf("%s parsing…", spin)}
 	}
 }
 
-// formatProgress is the non-TTY single-line summary: overall bar + percent +
-// per-table counts. Printed only when changed.
+// formatProgress is the non-TTY single-line summary: overall bar + percent.
+// Printed only when changed.
 func formatProgress(p api.SchemaProgress) string {
 	if p.Overall == "failed" {
 		return "failed"
 	}
 	switch p.Overall {
 	case "ready":
-		gen, req := pullTotals(p)
-		parts := make([]string, 0, len(p.Generation.Tables))
-		for _, t := range p.Generation.Tables {
-			parts = append(parts, fmt.Sprintf("%s %d/%d", t.Table, t.Generated, t.Requested))
-		}
-		detail := ""
-		if len(parts) > 0 {
-			detail = " " + strings.Join(parts, ", ")
-		}
-		return fmt.Sprintf("ready %s %s (%d/%d)%s", renderBar(gen, req, barWidth), barPercent(gen, req), gen, req, detail)
+		pct := 100
+		return fmt.Sprintf("ready %s %s", renderBar(pct, 100, barWidth), barPercent(pct, 100))
 	case "generating":
-		gen, req := pullTotals(p)
-		parts := make([]string, 0, len(p.Generation.Tables))
-		for _, t := range p.Generation.Tables {
-			parts = append(parts, fmt.Sprintf("%s %d/%d", t.Table, t.Generated, t.Requested))
-		}
-		detail := ""
-		if len(parts) > 0 {
-			detail = " " + strings.Join(parts, ", ")
-		}
-		return fmt.Sprintf("generating %s %s (%d/%d)%s", renderBar(gen, req, barWidth), barPercent(gen, req), gen, req, detail)
+		pct := overallPercent(p)
+		return fmt.Sprintf("generating %s %s", renderBar(pct, 100, barWidth), barPercent(pct, 100))
 	case "relationships":
 		return fmt.Sprintf("relationships (%d found)…", p.Relationships.Count)
 	default:

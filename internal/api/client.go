@@ -294,6 +294,7 @@ type SchemaProgress struct {
 	Relationships StageStatus        `json:"relationships"`
 	Generation    GenerationProgress `json:"generation"`
 	Overall       string             `json:"overall"`
+	Percentage    int                `json:"percentage"`
 	Error         string             `json:"error,omitempty"`
 }
 

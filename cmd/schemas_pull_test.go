@@ -57,6 +57,15 @@ func progressStub(t *testing.T, states ...string) (*api.Client, func()) {
 			state = states[calls]
 		}
 		calls++
+		percentage := 0
+		switch state {
+		case "ready":
+			percentage = 100
+		case "generating":
+			percentage = 50
+		case "relationships":
+			percentage = 3
+		}
 		_ = json.NewEncoder(w).Encode(api.SchemaProgress{
 			SchemaID:      "s1",
 			Parsing:       api.StageStatus{Status: "complete"},
@@ -64,7 +73,8 @@ func progressStub(t *testing.T, states ...string) (*api.Client, func()) {
 			Generation: api.GenerationProgress{Status: state, Tables: []api.ProgressTable{
 				{Table: "users", Requested: 10, Generated: 10, Status: "ready"},
 			}},
-			Overall: state,
+			Overall:    state,
+			Percentage: percentage,
 		})
 	})
 	s := httptest.NewServer(mux)
@@ -84,11 +94,14 @@ func TestPollProgressReady(t *testing.T) {
 		t.Fatalf("overall = %q", p.Overall)
 	}
 	text := out.String()
-	if !strings.Contains(text, "generating") || !strings.Contains(text, "users 10/10") {
+	if !strings.Contains(text, "generating") || !strings.Contains(text, "50%") {
 		t.Fatalf("output:\n%s", text)
 	}
 	if !strings.Contains(text, "ready") || !strings.Contains(text, "[") || !strings.Contains(text, "100%") {
 		t.Fatalf("bar output missing:\n%s", text)
+	}
+	if strings.Contains(text, "users") {
+		t.Fatalf("per-table detail should not be rendered:\n%s", text)
 	}
 	// Repeated identical states print once.
 	if strings.Count(text, "generating") != 1 {
@@ -176,38 +189,64 @@ func TestBarPercent(t *testing.T) {
 	}
 }
 
-func TestRenderPullLinesOverallAndPerTable(t *testing.T) {
+func TestRenderPullLinesSingleBar(t *testing.T) {
 	p := api.SchemaProgress{
-		Overall: "generating",
+		Overall:    "generating",
+		Percentage: 42,
 		Generation: api.GenerationProgress{Status: "generating", Tables: []api.ProgressTable{
 			{Table: "users", Requested: 100, Generated: 40, Status: "generating"},
 			{Table: "orders", Requested: 100, Generated: 44, Status: "generating"},
 		}},
 	}
 	lines := renderPullLines(p, "|")
-	if len(lines) != 3 {
-		t.Fatalf("lines = %v", lines)
+	if len(lines) != 1 {
+		t.Fatalf("expected a single line, got %v", lines)
 	}
-	if !strings.Contains(lines[0], "generating") || !strings.Contains(lines[0], "84/200") || !strings.Contains(lines[0], "42%") {
+	if !strings.Contains(lines[0], "generating") || !strings.Contains(lines[0], "42%") {
 		t.Fatalf("overall line = %q", lines[0])
 	}
-	if !strings.Contains(lines[1], "users") || !strings.Contains(lines[1], "40/100") {
-		t.Fatalf("users line = %q", lines[1])
+	if strings.Contains(lines[0], "users") || strings.Contains(lines[0], "orders") {
+		t.Fatalf("per-table detail leaked into line = %q", lines[0])
 	}
-	if !strings.Contains(lines[2], "orders") || !strings.Contains(lines[2], "44/100") {
-		t.Fatalf("orders line = %q", lines[2])
+}
+
+func TestRenderPullLinesRelationships(t *testing.T) {
+	p := api.SchemaProgress{
+		Overall:       "relationships",
+		Percentage:    3,
+		Relationships: api.StageStatus{Status: "complete", Count: 4},
+	}
+	lines := renderPullLines(p, "|")
+	if len(lines) != 1 || !strings.Contains(lines[0], "relationships") || !strings.Contains(lines[0], "4 found") {
+		t.Fatalf("relationships line = %v", lines)
+	}
+}
+
+func TestOverallPercentFallsBackToTotals(t *testing.T) {
+	p := api.SchemaProgress{
+		Overall: "generating",
+		Generation: api.GenerationProgress{Status: "generating", Tables: []api.ProgressTable{
+			{Table: "users", Requested: 200, Generated: 50, Status: "generating"},
+		}},
+	}
+	if got := overallPercent(p); got != 25 {
+		t.Fatalf("percent = %d, want 25", got)
 	}
 }
 
 func TestFormatProgressHasBar(t *testing.T) {
 	p := api.SchemaProgress{
-		Overall: "generating",
+		Overall:    "generating",
+		Percentage: 50,
 		Generation: api.GenerationProgress{Status: "generating", Tables: []api.ProgressTable{
 			{Table: "users", Requested: 10, Generated: 5, Status: "generating"},
 		}},
 	}
 	line := formatProgress(p)
-	if !strings.Contains(line, "generating") || !strings.Contains(line, "users 5/10") || !strings.Contains(line, "[") || !strings.Contains(line, "50%") {
+	if !strings.Contains(line, "generating") || !strings.Contains(line, "[") || !strings.Contains(line, "50%") {
 		t.Fatalf("line = %q", line)
+	}
+	if strings.Contains(line, "users") {
+		t.Fatalf("per-table detail leaked into line = %q", line)
 	}
 }
