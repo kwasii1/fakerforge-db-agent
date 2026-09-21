@@ -4,3 +4,14 @@ fakerforge-*
 *.test
 *.out
 AGENT.md
+# local CLI state (connection metadata, headless secret fallback)
+.fakerforge/
+# local credentials & keys — never commit these
+.env*
+*.pem
+*.key
+*credentials*.json
+*credentials*.yaml
+# test coverage artifacts
+coverage.out
+coverage.html

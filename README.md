@@ -46,35 +46,46 @@ installed version matches the latest release.
 
 The CLI talks to `https://fakerforge.com` by default — no configuration needed.
 
-```bash
-fakerforge login                 # validates GET /api/me, saves key in OS keychain
-fakerforge whoami
+### 1. Log in
 
-fakerforge connect                         # interactive: prompts for name, driver, host, port, database, user, password
-# or fully flagged (scriptable):
+```bash
+fakerforge login
+fakerforge whoami
+```
+
+The key is validated immediately and stored in your OS keychain.
+
+### 2. Register your database
+
+```bash
 fakerforge connect --name local --driver postgres \
   --host localhost --port 5432 --database myapp --user postgres
-# password via --password, FAKERFORGE_DB_PASSWORD, or interactive prompt
-fakerforge connect --list
+```
 
-fakerforge schema pull --connection local [--tables users,orders] [--rows 100]
-# introspects + builds parsed tables locally (no server parsing, no AI),
-# uploads shape only → generates → polls to ready with a live progress bar
-# (overall + per-table; TTY only, single-line fallback when piped; --no-progress for CI)
-# (or --async to return early)
-# re-pulls are idempotent via fingerprint (--force / --regenerate to redo)
+Run `fakerforge connect` with no flags for interactive prompts. The password comes from `--password`, `FAKERFORGE_DB_PASSWORD`, or a prompt.
 
-fakerforge schemas list --format table
-fakerforge schemas show <schema-id>            # tables with rows + status
-fakerforge schemas show <schema-id> --table users  # columns, status, sample
+### 3. Generate data
 
+```bash
+fakerforge schema pull --connection local --tables users,orders --rows 100
+```
+
+Your database is introspected locally and only the schema shape is uploaded. Re-pulls are idempotent; watch progress live, or pass `--async` to return early.
+
+### 4. Inspect and push
+
+```bash
+fakerforge schemas show <schema-id>
 fakerforge push --schema <schema-id> --connection local --table users --dry-run
 fakerforge push --schema <schema-id> --connection local --table users
-# no --table: TRUNCATE + INSERT every ready table, parents-first (confirmed);
-# --append to insert without truncating
+```
 
-fakerforge status   # API auth + per-connection ping + CLI version check
-fakerforge version  # print the CLI version
+Omit `--table` (with `--yes`) to `TRUNCATE + INSERT` every ready table, parents-first.
+
+### 5. Health check
+
+```bash
+fakerforge status
 ```
 
 ## Commands
@@ -132,13 +143,6 @@ GET  /api/cli/latest
 
 All with `Authorization: Bearer {api_key}`.
 
-## Releasing (maintainers)
+## License
 
-Push a tag; GoReleaser builds, archives, and publishes, and updates the Homebrew tap:
-
-```bash
-git tag v0.2.0 && git push origin v0.2.0
-```
-
-Requires the `HOMEBREW_TAP_TOKEN` repo secret (PAT with access to
-`kwasii1/homebrew-fakerforge`). See `.goreleaser.yml`.
+MIT — see [LICENSE](LICENSE).
