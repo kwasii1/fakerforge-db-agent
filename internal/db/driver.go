@@ -30,6 +30,9 @@ type Driver interface {
 	TableExists(table string) (bool, error)
 	ListTables() ([]string, error)
 	Introspect(table string) ([]Column, error)
+	// CheckConstraints returns the table's CHECK constraints. Servers
+	// without CHECK support (MySQL < 8.0.16) return none, not an error.
+	CheckConstraints(table string, cols []Column) ([]CheckConstraint, error)
 	DB() *sqlx.DB
 	Close() error
 }

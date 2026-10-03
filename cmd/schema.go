@@ -120,8 +120,15 @@ func RunSchemaPull(args []string) int {
 			fmt.Printf("introspect %s failed: %v\n", t, err)
 			return 1
 		}
+		checks, err := d.CheckConstraints(t, cols)
+		if err != nil {
+			fmt.Printf("introspect %s failed: %v\n", t, err)
+			return 1
+		}
 		printColumns(t, cols)
-		parsed[t] = parse.BuildParsedTable(t, conn.Database, cols, inSet)
+		tbl := parse.BuildParsedTable(t, conn.Database, cols, inSet)
+		parse.AddChecks(&tbl, checks)
+		parsed[t] = tbl
 	}
 
 	schemaName := *name

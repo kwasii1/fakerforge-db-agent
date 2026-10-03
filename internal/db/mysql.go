@@ -127,3 +127,26 @@ WHERE kcu.table_schema=DATABASE() AND kcu.table_name=? AND kcu.referenced_table_
 	}
 	return m, nil
 }
+
+func (d *myDriver) CheckConstraints(table string, cols []Column) ([]CheckConstraint, error) {
+	type row struct {
+		Name   string `db:"name"`
+		Clause string `db:"clause"`
+	}
+	var rows []row
+	q := `
+SELECT tc.constraint_name AS name, cc.check_clause AS clause
+FROM information_schema.table_constraints tc
+JOIN information_schema.check_constraints cc
+  ON cc.constraint_schema=tc.constraint_schema AND cc.constraint_name=tc.constraint_name
+WHERE tc.table_schema=DATABASE() AND tc.table_name=? AND tc.constraint_type='CHECK'
+ORDER BY tc.constraint_name`
+	if err := d.db.Select(&rows, q, table); err != nil {
+		// information_schema.check_constraints only exists from MySQL 8.0.16.
+		if strings.Contains(strings.ToLower(err.Error()), "check_constraints") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("check constraints %s: %w", table, err)
+	}
+	return buildChecks(rows, func(r row) (string, string) { return r.Name, r.Clause }, cols), nil
+}

@@ -233,3 +233,18 @@ func TestFingerprint(t *testing.T) {
 		}
 	}
 }
+
+func TestAddChecksAppendsIndexesAndDDL(t *testing.T) {
+	tbl := BuildParsedTable("t", "d", []db.Column{{Name: "price", Type: "decimal"}}, nil)
+	AddChecks(&tbl, []db.CheckConstraint{
+		{Name: "positive", Expr: "(`price` > 0)", Cols: []string{"price"}},
+		{Name: "constant", Expr: "(1 = 1)"},
+	})
+	if len(tbl.Indexes) != 1 || tbl.Indexes[0].Type != "CHECK" || tbl.Indexes[0].Expr != "(`price` > 0)" ||
+		len(tbl.Indexes[0].Cols) != 1 || tbl.Indexes[0].Cols[0].Name != "price" {
+		t.Fatalf("unexpected indexes: %+v", tbl.Indexes)
+	}
+	if !strings.Contains(tbl.SQL, "CHECK ((`price` > 0))") {
+		t.Fatalf("DDL missing CHECK: %s", tbl.SQL)
+	}
+}

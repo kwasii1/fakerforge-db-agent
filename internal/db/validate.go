@@ -43,12 +43,14 @@ var unsignedIntRanges = map[string][2]string{
 
 // RowValidator checks generated row values against the target table's
 // introspected constraints — integer range, string length, enum/set
-// membership, NOT NULL, and single-column uniqueness — before the rows are
+// membership, NOT NULL, single-column uniqueness and (via WithChecks)
+// CHECK constraints — before the rows are
 // handed to the database. It is the value-level companion to CheckSubset,
 // which only proves the target table is shaped like the schema.
 type RowValidator struct {
 	cols   map[string]Column
 	unique map[string]map[string]int // column -> stringified value -> first row index
+	checks []*compiledCheck
 }
 
 // NewRowValidator builds a validator from introspected target columns.
@@ -63,6 +65,21 @@ func NewRowValidator(dbCols []Column) *RowValidator {
 		}
 	}
 	return &RowValidator{cols: cols, unique: unique}
+}
+
+// WithChecks adds CHECK constraints to the validator. Constraints whose
+// expressions fall outside the evaluable subset (functions, arithmetic,
+// LIKE, ...) are returned as skipped: the database still enforces them.
+func (v *RowValidator) WithChecks(checks []CheckConstraint) (skipped []CheckConstraint) {
+	for _, c := range checks {
+		compiled, err := compileCheck(c)
+		if err != nil {
+			skipped = append(skipped, c)
+			continue
+		}
+		v.checks = append(v.checks, compiled)
+	}
+	return skipped
 }
 
 // ValidateRow checks one generated row. rowIndex is zero-based and only
@@ -93,7 +110,34 @@ func (v *RowValidator) ValidateRow(rowIndex int, row map[string]any) error {
 			seen[val] = rowIndex
 		}
 	}
+	for _, c := range v.checks {
+		if !c.passes(row) {
+			return fmt.Errorf("row %d: violates CHECK constraint %q (%s)%s",
+				rowIndex+1, c.Name, c.Expr, describeCheckValues(c, row))
+		}
+	}
 	return nil
+}
+
+// describeCheckValues renders the row's values for the constraint's
+// columns, e.g. ` with price=-5, status="x"`.
+func describeCheckValues(c *compiledCheck, row map[string]any) string {
+	parts := make([]string, 0, len(c.Cols))
+	for _, name := range c.Cols {
+		for k, val := range row {
+			if strings.EqualFold(k, name) {
+				if s, ok := val.(string); ok {
+					parts = append(parts, fmt.Sprintf("%s=%q", k, s))
+				} else {
+					parts = append(parts, fmt.Sprintf("%s=%v", k, val))
+				}
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " with " + strings.Join(parts, ", ")
 }
 
 func (v *RowValidator) checkValue(rowIndex int, col Column, raw any) error {

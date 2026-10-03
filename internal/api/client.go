@@ -167,6 +167,8 @@ type ParsedIndex struct {
 	Cols     []ParsedIndexCol `json:"cols"`
 	RefTable string           `json:"ref_table,omitempty"`
 	RefCols  []ParsedIndexCol `json:"ref_cols,omitempty"`
+	// Expr is the boolean expression of a CHECK index, empty otherwise.
+	Expr string `json:"expr,omitempty"`
 }
 
 type ParsedTable struct {

@@ -109,6 +109,7 @@ func confirmWrite(yes bool, format string, a ...any) bool {
 type tablePlan struct {
 	table   string
 	dbCols  []db.Column
+	checks  []db.CheckConstraint
 	rules   []api.SchemaColumn
 	rows    int
 	parents []string
@@ -141,6 +142,11 @@ func pushSingleTable(client *api.Client, d db.Driver, conn config.Connection, sc
 		fmt.Printf("introspect failed: %v\n", err)
 		return 1
 	}
+	checks, err := d.CheckConstraints(table, dbCols)
+	if err != nil {
+		fmt.Printf("introspect failed: %v\n", err)
+		return 1
+	}
 
 	if isProdHost(conn.Host) && !dryRun {
 		if !confirmWrite(yes, "WARNING: target host %q looks like production.\n", conn.Host) {
@@ -152,7 +158,7 @@ func pushSingleTable(client *api.Client, d db.Driver, conn config.Connection, sc
 		return pushDryRun(client, schemaID, table, dbCols)
 	}
 
-	n, err := streamInsert(client, d.DB(), conn.Driver, schemaID, table, dbCols, detailCols(detail), batchSize)
+	n, err := streamInsert(client, d.DB(), conn.Driver, schemaID, table, dbCols, checks, detailCols(detail), batchSize)
 	if err != nil {
 		fmt.Printf("\n%s\n", err)
 		return 1
@@ -203,6 +209,11 @@ func pushAllTables(client *api.Client, d db.Driver, conn config.Connection, sche
 			fmt.Printf("introspect %q failed: %v\n", t.Table, err)
 			return 1
 		}
+		checks, err := d.CheckConstraints(t.Table, dbCols)
+		if err != nil {
+			fmt.Printf("introspect %q failed: %v\n", t.Table, err)
+			return 1
+		}
 		td, err := client.ShowTable(schemaID, t.Table)
 		if err != nil {
 			fmt.Printf("schema fetch failed for %q: %v\n", t.Table, err)
@@ -215,7 +226,7 @@ func pushAllTables(client *api.Client, d db.Driver, conn config.Connection, sche
 				return 1
 			}
 		}
-		plans = append(plans, tablePlan{table: t.Table, dbCols: dbCols, rules: rules, rows: t.Rows})
+		plans = append(plans, tablePlan{table: t.Table, dbCols: dbCols, checks: checks, rules: rules, rows: t.Rows})
 	}
 	if len(plans) == 0 {
 		fmt.Printf("schema %s has no ready tables to push\n", schemaID)
@@ -290,7 +301,7 @@ func pushAllTables(client *api.Client, d db.Driver, conn config.Connection, sche
 	total := 0
 	for _, t := range ordered {
 		p := byName[t]
-		n, err := streamInsert(client, d.DB(), conn.Driver, schemaID, t, p.dbCols, p.rules, batchSize)
+		n, err := streamInsert(client, d.DB(), conn.Driver, schemaID, t, p.dbCols, p.checks, p.rules, batchSize)
 		if err != nil {
 			fmt.Printf("\n%s\naborted after %d total rows (%s: %d rows not completed)\n", err, total, t, p.rows)
 			return 1
@@ -339,13 +350,16 @@ func tableParentsOf(dbCols []db.Column, inSet map[string]bool) []string {
 
 // streamInsert streams rows and batch-inserts them, printing running
 // progress. Returns rows inserted or a descriptive error.
-func streamInsert(client *api.Client, sqldb *sqlx.DB, driver, schemaID, table string, dbCols []db.Column, rules []api.SchemaColumn, batchSize int) (int, error) {
+func streamInsert(client *api.Client, sqldb *sqlx.DB, driver, schemaID, table string, dbCols []db.Column, checks []db.CheckConstraint, rules []api.SchemaColumn, batchSize int) (int, error) {
 	batch := make([]map[string]any, 0, batchSize)
 	var columns []string
 	succeeded := 0
 	checkedSubset := len(rules) > 0
 	var abortErr error
 	validator := db.NewRowValidator(dbCols)
+	for _, c := range validator.WithChecks(checks) {
+		fmt.Fprintf(os.Stderr, "note: CHECK %q on %s is not pre-validated (%s); the database will enforce it\n", c.Name, table, c.Expr)
+	}
 	rowIndex := 0
 
 	flush := func() int {

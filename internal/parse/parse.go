@@ -92,6 +92,32 @@ func BuildParsedTable(table, database string, cols []db.Column, inSet map[string
 	return t
 }
 
+// maxCheckExprLen mirrors the server's validation limit for a CHECK
+// index expression.
+const maxCheckExprLen = 2000
+
+// AddChecks appends CHECK indexes to a parsed table and re-synthesizes its
+// DDL so the server's mapping prompts see the constraints. Checks that
+// reference no column, or exceed the server's expression limit, are
+// skipped.
+func AddChecks(t *Table, checks []db.CheckConstraint) {
+	added := false
+	for _, c := range checks {
+		if len(c.Cols) == 0 || len(c.Expr) > maxCheckExprLen {
+			continue
+		}
+		cols := make([]IndexCol, 0, len(c.Cols))
+		for _, name := range c.Cols {
+			cols = append(cols, IndexCol{Name: name})
+		}
+		t.Indexes = append(t.Indexes, Index{Type: "CHECK", Cols: cols, Expr: c.Expr})
+		added = true
+	}
+	if added {
+		t.SQL = SynthesizeDDL(t.Name, t.Fields, t.Indexes)
+	}
+}
+
 // sizedType reports whether Length is a declared constraint for the
 // base type (as opposed to an inherent storage cap).
 func sizedType(t string) bool {
@@ -137,6 +163,10 @@ func SynthesizeDDL(table string, fields []Field, indexes []Index) string {
 			if idx.RefTable != "" && len(idx.RefCols) > 0 {
 				defs = append(defs, fmt.Sprintf("  FOREIGN KEY (%s) REFERENCES %s (%s)",
 					joinCols(idx.Cols), quoteIdent(idx.RefTable), joinCols(idx.RefCols)))
+			}
+		case "CHECK":
+			if idx.Expr != "" {
+				defs = append(defs, fmt.Sprintf("  CHECK (%s)", idx.Expr))
 			}
 		}
 	}

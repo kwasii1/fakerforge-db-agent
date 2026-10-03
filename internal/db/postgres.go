@@ -178,3 +178,22 @@ WHERE tc.table_schema='public' AND tc.table_name=$1 AND tc.constraint_type='FORE
 	}
 	return m, nil
 }
+
+func (d *pgDriver) CheckConstraints(table string, cols []Column) ([]CheckConstraint, error) {
+	type row struct {
+		Name string `db:"name"`
+		Def  string `db:"def"`
+	}
+	var rows []row
+	q := `
+SELECT con.conname AS name, pg_get_constraintdef(con.oid) AS def
+FROM pg_constraint con
+JOIN pg_class rel ON rel.oid=con.conrelid
+JOIN pg_namespace ns ON ns.oid=rel.relnamespace
+WHERE ns.nspname='public' AND rel.relname=$1 AND con.contype='c'
+ORDER BY con.conname`
+	if err := d.db.Select(&rows, q, table); err != nil {
+		return nil, fmt.Errorf("check constraints %s: %w", table, err)
+	}
+	return buildChecks(rows, func(r row) (string, string) { return r.Name, r.Def }, cols), nil
+}
